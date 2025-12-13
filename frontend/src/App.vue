@@ -92,8 +92,24 @@
         </div>
       </section>
 
-      <!-- 中间面板 - 图表 -->
+      <!-- 中间面板 - 传送带 + 图表 -->
       <section class="center-panel">
+        <!-- 传送带可视化 -->
+        <div class="card conveyor-card">
+          <h3>
+            生产线传送带
+            <span class="conveyor-status-badge" :class="{ active: conveyorConnected }">
+              {{ conveyorConnected ? '● 在线' : '○ 离线' }}
+            </span>
+          </h3>
+          <ConveyorBelt 
+            ref="conveyorRef"
+            @connected="conveyorConnected = true"
+            @disconnected="conveyorConnected = false"
+            @state-change="onConveyorStateChange"
+          />
+        </div>
+
         <!-- 温度曲线 -->
         <div class="card chart-card">
           <h3>温度实时曲线</h3>
@@ -201,13 +217,26 @@
 
 
 <script setup>
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import * as echarts from 'echarts'
 import { ElMessage } from 'element-plus'
 import { getDashboard, sendControl, getAlerts, resolveAlert } from './api'
 import { wsClient } from './utils/websocket'
+import ConveyorBelt from './components/ConveyorBelt.vue'
 
 const deviceId = ref('device_001')
+
+// 传送带相关
+const conveyorRef = ref(null)
+const conveyorConnected = ref(false)
+
+// 传送带状态变化处理
+const onConveyorStateChange = (state) => {
+  // 同步传送带完成数量到生产计数
+  if (state.completed_count !== undefined) {
+    // 可以选择是否同步到主系统
+  }
+}
 const wsConnected = ref(false)
 const currentTime = ref('')
 
@@ -284,46 +313,107 @@ const updateTime = () => {
   currentTime.value = new Date().toLocaleString('zh-CN')
 }
 
+// 科技风图表主题配置
+const chartTheme = {
+  backgroundColor: 'transparent',
+  textStyle: { color: 'rgba(255, 255, 255, 0.65)' },
+  axisLine: { lineStyle: { color: 'rgba(58, 145, 199, 0.3)' } },
+  splitLine: { lineStyle: { color: 'rgba(58, 145, 199, 0.15)', type: 'dashed' } },
+  axisTick: { lineStyle: { color: 'rgba(58, 145, 199, 0.3)' } }
+}
+
 // 初始化图表
 const initCharts = () => {
   // 温度图表
   tempChart = echarts.init(tempChartRef.value)
   tempChart.setOption({
-    grid: { top: 10, right: 10, bottom: 30, left: 50 },
-    xAxis: { type: 'category', data: [] },
-    yAxis: { type: 'value', name: '°C', min: 0, max: 120 },
+    backgroundColor: 'transparent',
+    grid: { top: 20, right: 15, bottom: 30, left: 55 },
+    xAxis: { 
+      type: 'category', 
+      data: [],
+      axisLine: chartTheme.axisLine,
+      axisTick: chartTheme.axisTick,
+      axisLabel: { color: 'rgba(255, 255, 255, 0.5)', fontSize: 10 }
+    },
+    yAxis: { 
+      type: 'value', 
+      name: '°C', 
+      min: 0, 
+      max: 120,
+      nameTextStyle: { color: 'rgba(255, 255, 255, 0.5)', fontSize: 11 },
+      axisLine: chartTheme.axisLine,
+      splitLine: chartTheme.splitLine,
+      axisLabel: { color: 'rgba(255, 255, 255, 0.5)', fontSize: 10 }
+    },
     series: [{
       type: 'line',
       smooth: true,
+      symbol: 'circle',
+      symbolSize: 4,
       data: [],
-      areaStyle: { opacity: 0.3 },
-      lineStyle: { color: '#f56c6c' },
-      itemStyle: { color: '#f56c6c' }
+      areaStyle: { 
+        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+          { offset: 0, color: 'rgba(64, 158, 255, 0.35)' },
+          { offset: 1, color: 'rgba(64, 158, 255, 0.05)' }
+        ])
+      },
+      lineStyle: { color: '#409eff', width: 2 },
+      itemStyle: { color: '#409eff', borderColor: '#0d2b45', borderWidth: 2 }
     }],
     visualMap: {
       show: false,
       pieces: [
-        { lte: 80, color: '#67c23a' },
-        { gt: 80, lte: 95, color: '#e6a23c' },
-        { gt: 95, color: '#f56c6c' }
+        { lte: 80, color: '#3a91c7' },
+        { gt: 80, lte: 95, color: '#d4915e' },
+        { gt: 95, color: '#c75050' }
       ]
-    }
+    },
+    animation: true,
+    animationDuration: 180,
+    animationEasing: 'linear'
   })
 
   // 压力图表
   pressureChart = echarts.init(pressureChartRef.value)
   pressureChart.setOption({
-    grid: { top: 10, right: 10, bottom: 30, left: 50 },
-    xAxis: { type: 'category', data: [] },
-    yAxis: { type: 'value', name: 'kPa', min: 80, max: 150 },
+    backgroundColor: 'transparent',
+    grid: { top: 20, right: 15, bottom: 30, left: 55 },
+    xAxis: { 
+      type: 'category', 
+      data: [],
+      axisLine: chartTheme.axisLine,
+      axisTick: chartTheme.axisTick,
+      axisLabel: { color: 'rgba(255, 255, 255, 0.5)', fontSize: 10 }
+    },
+    yAxis: { 
+      type: 'value', 
+      name: 'kPa', 
+      min: 80, 
+      max: 150,
+      nameTextStyle: { color: 'rgba(255, 255, 255, 0.5)', fontSize: 11 },
+      axisLine: chartTheme.axisLine,
+      splitLine: chartTheme.splitLine,
+      axisLabel: { color: 'rgba(255, 255, 255, 0.5)', fontSize: 10 }
+    },
     series: [{
       type: 'line',
       smooth: true,
+      symbol: 'circle',
+      symbolSize: 4,
       data: [],
-      areaStyle: { opacity: 0.3 },
-      lineStyle: { color: '#409eff' },
-      itemStyle: { color: '#409eff' }
-    }]
+      areaStyle: { 
+        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+          { offset: 0, color: 'rgba(45, 183, 181, 0.35)' },
+          { offset: 1, color: 'rgba(45, 183, 181, 0.05)' }
+        ])
+      },
+      lineStyle: { color: '#2db7b5', width: 2 },
+      itemStyle: { color: '#2db7b5', borderColor: '#0d2b45', borderWidth: 2 }
+    }],
+    animation: true,
+    animationDuration: 180,
+    animationEasing: 'linear'
   })
 }
 
@@ -581,6 +671,26 @@ const setupWebSocket = async () => {
   }
 }
 
+// 监听生产状态变化，同步到传送带
+watch(productionStatus, (newStatus) => {
+  if (conveyorRef.value) {
+    if (newStatus === 'running') {
+      conveyorRef.value.start()
+    } else if (newStatus === 'stopped') {
+      conveyorRef.value.stop()
+    } else if (newStatus === 'paused') {
+      conveyorRef.value.pause()
+    }
+  }
+})
+
+// 监听模式变化，同步到传送带
+watch(selectedMode, (newMode) => {
+  if (conveyorRef.value) {
+    conveyorRef.value.setMode(newMode)
+  }
+})
+
 // 生命周期
 let timeInterval = null
 
@@ -613,54 +723,146 @@ onUnmounted(() => {
 
 
 <style>
+/* ========================================
+   科技风工业监控系统 - 视觉规范
+   风格: 深色科技 / 工业感 / 官方权威 / 克制高级
+   ======================================== */
+
+/* CSS 变量定义 */
+:root {
+  /* 主色系 - 科技蓝 */
+  --primary-color: #3a91c7;
+  --primary-light: #5ba8d9;
+  --primary-dark: #2a7ab0;
+  
+  /* 辅色 - 青色 */
+  --accent-color: #2db7b5;
+  --accent-light: #4dcfcd;
+  
+  /* 警示色 */
+  --warning-color: #d4915e;
+  --danger-color: #c75050;
+  --success-color: #4a9d6e;
+  
+  /* 背景色系 - 深色层次 */
+  --bg-primary: #0a0f1a;
+  --bg-secondary: #0d1520;
+  --bg-tertiary: #111b2a;
+  --bg-card: rgba(15, 25, 40, 0.75);
+  
+  /* 边框与分割线 */
+  --border-color: rgba(58, 145, 199, 0.2);
+  --border-glow: rgba(58, 145, 199, 0.4);
+  
+  /* 文字色 */
+  --text-primary: rgba(255, 255, 255, 0.92);
+  --text-secondary: rgba(255, 255, 255, 0.65);
+  --text-muted: rgba(255, 255, 255, 0.4);
+  
+  /* 毛玻璃效果 */
+  --glass-blur: 12px;
+  --glass-bg: rgba(12, 20, 35, 0.7);
+  
+  /* 等宽字体 - 仪表盘数字 */
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Consolas', 'Monaco', monospace;
+  
+  /* 动效时长 */
+  --transition-fast: 150ms;
+  --transition-normal: 200ms;
+}
+
 * {
   margin: 0;
   padding: 0;
   box-sizing: border-box;
 }
 
+/* 全局字体引入 */
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+/* ========================================
+   主容器
+   ======================================== */
 .dashboard {
   min-height: 100vh;
-  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-  color: #fff;
-  font-family: 'Microsoft YaHei', sans-serif;
+  background: 
+    radial-gradient(ellipse at 20% 0%, rgba(58, 145, 199, 0.08) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 100%, rgba(45, 183, 181, 0.06) 0%, transparent 50%),
+    linear-gradient(180deg, var(--bg-primary) 0%, var(--bg-secondary) 50%, var(--bg-tertiary) 100%);
+  color: var(--text-primary);
+  font-family: 'Microsoft YaHei', 'PingFang SC', -apple-system, sans-serif;
+  position: relative;
 }
 
+/* 微妙的网格背景 */
+.dashboard::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-image: 
+    linear-gradient(rgba(58, 145, 199, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(58, 145, 199, 0.03) 1px, transparent 1px);
+  background-size: 50px 50px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ========================================
+   顶部标题栏
+   ======================================== */
 .header {
+  position: relative;
+  z-index: 10;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 15px 30px;
-  background: rgba(0, 0, 0, 0.3);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 16px 32px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border-bottom: 1px solid var(--border-color);
 }
 
 .header h1 {
-  font-size: 24px;
+  font-size: 22px;
   font-weight: 500;
+  letter-spacing: 1px;
+  color: var(--text-primary);
 }
 
 .header-info {
   display: flex;
-  gap: 20px;
+  gap: 24px;
   align-items: center;
 }
 
 .connection-status {
-  color: #f56c6c;
-  font-size: 14px;
+  font-size: 13px;
+  color: var(--danger-color);
+  font-family: var(--font-mono);
+  letter-spacing: 0.5px;
 }
 
 .connection-status.connected {
-  color: #67c23a;
+  color: var(--success-color);
 }
 
 .time {
-  color: #909399;
-  font-size: 14px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  letter-spacing: 0.5px;
 }
 
+/* ========================================
+   主内容区域
+   ======================================== */
 .main-content {
+  position: relative;
+  z-index: 1;
   display: grid;
   grid-template-columns: 300px 1fr 280px;
   gap: 20px;
@@ -668,30 +870,48 @@ onUnmounted(() => {
   height: calc(100vh - 70px);
 }
 
+/* ========================================
+   卡片组件 - 毛玻璃效果
+   ======================================== */
 .card {
-  background: rgba(255, 255, 255, 0.05);
-  border-radius: 12px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border-radius: 8px;
   padding: 20px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--border-color);
+  box-shadow: 
+    0 4px 24px rgba(0, 0, 0, 0.25),
+    inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  transition: border-color var(--transition-normal) ease;
+}
+
+.card:hover {
+  border-color: var(--border-glow);
 }
 
 .card h3 {
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 500;
-  margin-bottom: 15px;
-  color: #e0e0e0;
+  margin-bottom: 16px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
   display: flex;
   align-items: center;
   gap: 10px;
 }
 
-/* 左侧面板 */
+/* ========================================
+   左侧面板
+   ======================================== */
 .left-panel {
   display: flex;
   flex-direction: column;
   gap: 20px;
 }
 
+/* 生产状态卡片 */
 .status-card .status-display {
   text-align: center;
   margin-bottom: 20px;
@@ -699,70 +919,87 @@ onUnmounted(() => {
 
 .status-indicator {
   display: inline-block;
-  padding: 10px 30px;
-  border-radius: 20px;
-  font-size: 18px;
-  font-weight: bold;
-  margin-bottom: 10px;
+  padding: 10px 28px;
+  border-radius: 4px;
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  letter-spacing: 2px;
+  font-family: var(--font-mono);
 }
 
 .status-indicator.running {
-  background: rgba(103, 194, 58, 0.2);
-  color: #67c23a;
-  border: 1px solid #67c23a;
+  background: rgba(74, 157, 110, 0.15);
+  color: var(--success-color);
+  border: 1px solid rgba(74, 157, 110, 0.4);
+  box-shadow: 0 0 20px rgba(74, 157, 110, 0.1);
 }
 
 .status-indicator.stopped {
-  background: rgba(245, 108, 108, 0.2);
-  color: #f56c6c;
-  border: 1px solid #f56c6c;
+  background: rgba(199, 80, 80, 0.15);
+  color: var(--danger-color);
+  border: 1px solid rgba(199, 80, 80, 0.4);
 }
 
 .status-indicator.paused {
-  background: rgba(230, 162, 60, 0.2);
-  color: #e6a23c;
-  border: 1px solid #e6a23c;
+  background: rgba(212, 145, 94, 0.15);
+  color: var(--warning-color);
+  border: 1px solid rgba(212, 145, 94, 0.4);
 }
 
 .mode-display {
-  color: #909399;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.mode-display strong {
+  color: var(--accent-color);
 }
 
 .production-count {
   text-align: center;
-  padding: 15px;
-  background: rgba(64, 158, 255, 0.1);
-  border-radius: 8px;
+  padding: 18px;
+  background: rgba(58, 145, 199, 0.08);
+  border-radius: 6px;
+  border: 1px solid rgba(58, 145, 199, 0.15);
 }
 
 .count-value {
-  font-size: 36px;
-  font-weight: bold;
-  color: #409eff;
-  margin: 0 5px;
+  font-size: 42px;
+  font-weight: 600;
+  color: var(--primary-color);
+  margin: 0 6px;
+  font-family: var(--font-mono);
+  letter-spacing: -1px;
 }
 
 .count-label, .count-unit {
-  color: #909399;
+  color: var(--text-muted);
+  font-size: 13px;
 }
 
+/* 控制面板 */
 .control-buttons {
   display: flex;
   gap: 10px;
-  margin-bottom: 15px;
+  margin-bottom: 16px;
 }
 
 .control-buttons .el-button {
   flex: 1;
+  font-weight: 500;
+  letter-spacing: 1px;
 }
 
 .mode-switch {
   display: flex;
   align-items: center;
-  gap: 10px;
-  color: #909399;
+  gap: 12px;
+  color: var(--text-secondary);
+  font-size: 13px;
 }
 
+/* 报警列表 */
 .alert-card {
   flex: 1;
   overflow: hidden;
@@ -776,47 +1013,94 @@ onUnmounted(() => {
   max-height: 200px;
 }
 
+.alert-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+.alert-list::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 2px;
+}
+
+.alert-list::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 2px;
+}
+
 .alert-item {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px;
+  padding: 12px;
   margin-bottom: 8px;
-  border-radius: 6px;
-  font-size: 13px;
+  border-radius: 4px;
+  font-size: 12px;
+  transition: background var(--transition-fast) ease;
 }
 
 .alert-item.warning {
-  background: rgba(230, 162, 60, 0.2);
-  border-left: 3px solid #e6a23c;
+  background: rgba(212, 145, 94, 0.1);
+  border-left: 2px solid var(--warning-color);
 }
 
 .alert-item.danger {
-  background: rgba(245, 108, 108, 0.2);
-  border-left: 3px solid #f56c6c;
+  background: rgba(199, 80, 80, 0.1);
+  border-left: 2px solid var(--danger-color);
 }
 
 .alert-time {
-  color: #909399;
-  font-size: 12px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-family: var(--font-mono);
   white-space: nowrap;
 }
 
 .alert-message {
   flex: 1;
+  color: var(--text-secondary);
 }
 
 .no-alerts {
   text-align: center;
-  color: #909399;
-  padding: 20px;
+  color: var(--text-muted);
+  padding: 24px;
+  font-size: 13px;
 }
 
-/* 中间面板 */
+/* ========================================
+   中间面板 - 传送带 + 图表
+   ======================================== */
 .center-panel {
   display: flex;
   flex-direction: column;
   gap: 20px;
+}
+
+/* 传送带卡片 */
+.conveyor-card {
+  flex-shrink: 0;
+}
+
+.conveyor-card h3 {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.conveyor-status-badge {
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.conveyor-status-badge.active {
+  background: rgba(74, 157, 110, 0.15);
+  color: var(--success-color);
 }
 
 .chart-card {
@@ -832,55 +1116,68 @@ onUnmounted(() => {
 
 .current-value {
   text-align: center;
-  padding: 10px;
-  font-size: 16px;
-  color: #67c23a;
+  padding: 12px;
+  font-size: 14px;
+  color: var(--success-color);
+  font-family: var(--font-mono);
+  border-top: 1px solid var(--border-color);
+  margin-top: 12px;
+}
+
+.current-value strong {
+  font-size: 18px;
+  font-weight: 600;
 }
 
 .current-value.warning {
-  color: #e6a23c;
+  color: var(--warning-color);
 }
 
 .current-value.danger {
-  color: #f56c6c;
-  animation: blink 1s infinite;
+  color: var(--danger-color);
+  animation: value-pulse 1.5s ease-in-out infinite;
 }
 
-@keyframes blink {
-  50% { opacity: 0.5; }
+@keyframes value-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
 }
 
-/* 右侧面板 */
+/* ========================================
+   右侧面板
+   ======================================== */
 .right-panel {
   display: flex;
   flex-direction: column;
   gap: 20px;
 }
 
-/* 视频流样式 */
+/* 视频流状态 */
 .video-status {
-  font-size: 12px;
-  padding: 2px 8px;
-  border-radius: 10px;
-  background: rgba(144, 147, 153, 0.3);
-  color: #909399;
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
 }
 
 .video-status.active {
-  background: rgba(103, 194, 58, 0.3);
-  color: #67c23a;
+  background: rgba(74, 157, 110, 0.15);
+  color: var(--success-color);
 }
 
 .video-container {
   width: 100%;
   aspect-ratio: 4/3;
-  background: #000;
-  border-radius: 8px;
+  background: var(--bg-primary);
+  border-radius: 6px;
   overflow: hidden;
-  margin-bottom: 15px;
+  margin-bottom: 16px;
   display: flex;
   align-items: center;
   justify-content: center;
+  border: 1px solid var(--border-color);
 }
 
 .video-frame {
@@ -891,90 +1188,111 @@ onUnmounted(() => {
 
 .video-placeholder {
   text-align: center;
-  color: #606266;
+  color: var(--text-muted);
 }
 
 .video-placeholder span {
   display: block;
-  font-size: 14px;
-  margin-bottom: 5px;
+  font-size: 13px;
+  margin-bottom: 6px;
 }
 
 .video-placeholder small {
-  font-size: 12px;
-  color: #909399;
+  font-size: 11px;
+  color: var(--text-muted);
+  opacity: 0.7;
 }
 
+/* 检测状态 */
 .detection-status {
   text-align: center;
-  padding: 15px;
-  border-radius: 8px;
-  background: rgba(103, 194, 58, 0.1);
+  padding: 16px;
+  border-radius: 6px;
+  background: rgba(74, 157, 110, 0.08);
+  border: 1px solid rgba(74, 157, 110, 0.2);
+  transition: all var(--transition-normal) ease;
 }
 
 .detection-status.danger {
-  background: rgba(245, 108, 108, 0.2);
-  animation: pulse 1s infinite;
+  background: rgba(199, 80, 80, 0.12);
+  border-color: rgba(199, 80, 80, 0.3);
+  animation: danger-glow 1.5s ease-in-out infinite;
 }
 
-@keyframes pulse {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.02); }
+@keyframes danger-glow {
+  0%, 100% { box-shadow: 0 0 0 rgba(199, 80, 80, 0); }
+  50% { box-shadow: 0 0 20px rgba(199, 80, 80, 0.2); }
 }
 
 .person-count {
-  font-size: 18px;
-  margin-bottom: 10px;
+  font-size: 14px;
+  margin-bottom: 8px;
+  color: var(--text-secondary);
 }
 
 .person-count strong {
   font-size: 28px;
-  color: #409eff;
+  color: var(--primary-color);
+  font-family: var(--font-mono);
+  font-weight: 600;
 }
 
 .zone-status {
-  font-size: 16px;
+  font-size: 14px;
+  color: var(--success-color);
 }
 
 .detection-status.danger .zone-status {
-  color: #f56c6c;
-  font-weight: bold;
+  color: var(--danger-color);
+  font-weight: 600;
 }
 
+/* 统计网格 */
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
+  gap: 12px;
 }
 
 .stat-item {
   text-align: center;
-  padding: 15px 5px;
-  background: rgba(255, 255, 255, 0.05);
-  border-radius: 8px;
+  padding: 16px 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  transition: border-color var(--transition-fast) ease;
+}
+
+.stat-item:hover {
+  border-color: var(--border-glow);
 }
 
 .stat-value {
   display: block;
-  font-size: 24px;
-  font-weight: bold;
-  color: #409eff;
+  font-size: 26px;
+  font-weight: 600;
+  color: var(--primary-color);
+  font-family: var(--font-mono);
+  margin-bottom: 4px;
 }
 
 .stat-value.danger {
-  color: #f56c6c;
+  color: var(--danger-color);
 }
 
 .stat-value.warning {
-  color: #e6a23c;
+  color: var(--warning-color);
 }
 
 .stat-label {
-  font-size: 12px;
-  color: #909399;
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 0.5px;
 }
 
-/* LED指示灯样式 */
+/* ========================================
+   LED 指示灯
+   ======================================== */
 .led-card {
   flex-shrink: 0;
 }
@@ -982,7 +1300,7 @@ onUnmounted(() => {
 .led-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 15px;
+  gap: 16px;
 }
 
 .led-item {
@@ -993,77 +1311,76 @@ onUnmounted(() => {
 }
 
 .led-item span {
-  font-size: 12px;
-  color: #909399;
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 0.5px;
 }
 
 .led-light {
-  width: 24px;
-  height: 24px;
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
-  background: #3a3a3a;
-  border: 2px solid #555;
-  box-shadow: inset 0 2px 4px rgba(0,0,0,0.3);
-  transition: all 0.3s ease;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  transition: all var(--transition-normal) ease;
 }
 
 /* 报警灯 - 红色 */
 .led-light.on {
-  background: #f56c6c;
-  box-shadow: 0 0 15px #f56c6c, 0 0 30px rgba(245, 108, 108, 0.5);
-  border-color: #f89898;
+  background: var(--danger-color);
+  box-shadow: 0 0 12px var(--danger-color), 0 0 24px rgba(199, 80, 80, 0.4);
+  border-color: rgba(199, 80, 80, 0.8);
 }
 
 /* 产品A灯 - 绿色 */
 .led-light.product-a.on {
-  background: #67c23a;
-  box-shadow: 0 0 15px #67c23a, 0 0 30px rgba(103, 194, 58, 0.5);
-  border-color: #95d475;
+  background: var(--success-color);
+  box-shadow: 0 0 12px var(--success-color), 0 0 24px rgba(74, 157, 110, 0.4);
+  border-color: rgba(74, 157, 110, 0.8);
 }
 
 /* 产品B灯 - 蓝色 */
 .led-light.product-b.on {
-  background: #409eff;
-  box-shadow: 0 0 15px #409eff, 0 0 30px rgba(64, 158, 255, 0.5);
-  border-color: #79bbff;
+  background: var(--primary-color);
+  box-shadow: 0 0 12px var(--primary-color), 0 0 24px rgba(58, 145, 199, 0.4);
+  border-color: rgba(58, 145, 199, 0.8);
 }
 
-/* 运行灯 - 黄色 */
+/* 运行灯 - 琥珀色 */
 .led-light.running.on {
-  background: #e6a23c;
-  box-shadow: 0 0 15px #e6a23c, 0 0 30px rgba(230, 162, 60, 0.5);
-  border-color: #eebe77;
+  background: var(--warning-color);
+  box-shadow: 0 0 12px var(--warning-color), 0 0 24px rgba(212, 145, 94, 0.4);
+  border-color: rgba(212, 145, 94, 0.8);
 }
 
 /* 闪烁动画 */
 .led-light.blink {
-  animation: led-blink 0.5s infinite;
+  animation: led-blink 0.6s ease-in-out infinite;
 }
 
 @keyframes led-blink {
-  0%, 100% { 
-    opacity: 1;
-    box-shadow: 0 0 15px #f56c6c, 0 0 30px rgba(245, 108, 108, 0.5);
-  }
-  50% { 
-    opacity: 0.3;
-    box-shadow: none;
-  }
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
 }
 
+/* 设备信息 */
 .device-info p {
-  color: #909399;
-  margin-bottom: 8px;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+  font-size: 13px;
+  font-family: var(--font-mono);
 }
 
-/* ==================== 报警器样式 ==================== */
+/* ========================================
+   报警器遮罩
+   ======================================== */
 .dashboard.alarm-active {
-  animation: screen-flash 0.5s infinite;
+  animation: screen-alert 0.8s ease-in-out infinite;
 }
 
-@keyframes screen-flash {
+@keyframes screen-alert {
   0%, 100% { }
-  50% { box-shadow: inset 0 0 100px rgba(245, 108, 108, 0.3); }
+  50% { box-shadow: inset 0 0 80px rgba(199, 80, 80, 0.15); }
 }
 
 .alarm-overlay {
@@ -1072,14 +1389,15 @@ onUnmounted(() => {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.85);
+  background: rgba(10, 15, 26, 0.92);
+  backdrop-filter: blur(8px);
   z-index: 9999;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  animation: alarm-fade-in 0.3s ease;
+  animation: alarm-fade-in 0.2s ease;
 }
 
 @keyframes alarm-fade-in {
@@ -1089,100 +1407,139 @@ onUnmounted(() => {
 
 .alarm-siren {
   position: relative;
-  margin-bottom: 40px;
+  margin-bottom: 48px;
 }
 
 .siren-light {
   position: absolute;
-  top: -20px;
+  top: -24px;
   left: 50%;
   transform: translateX(-50%);
-  width: 60px;
-  height: 60px;
-  background: #f56c6c;
+  width: 48px;
+  height: 48px;
+  background: var(--danger-color);
   border-radius: 50%;
-  animation: siren-rotate 0.5s linear infinite;
-  box-shadow: 
-    0 0 30px #f56c6c,
-    0 0 60px #f56c6c,
-    0 0 90px rgba(245, 108, 108, 0.5);
+  animation: siren-pulse 0.8s ease-in-out infinite;
 }
 
-@keyframes siren-rotate {
-  0% { 
-    box-shadow: 
-      -100px 0 60px rgba(245, 108, 108, 0.8),
-      0 0 30px #f56c6c;
-  }
-  25% { 
-    box-shadow: 
-      0 -100px 60px rgba(245, 108, 108, 0.8),
-      0 0 30px #f56c6c;
+@keyframes siren-pulse {
+  0%, 100% { 
+    box-shadow: 0 0 30px var(--danger-color), 0 0 60px rgba(199, 80, 80, 0.5);
+    transform: translateX(-50%) scale(1);
   }
   50% { 
-    box-shadow: 
-      100px 0 60px rgba(245, 108, 108, 0.8),
-      0 0 30px #f56c6c;
-  }
-  75% { 
-    box-shadow: 
-      0 100px 60px rgba(245, 108, 108, 0.8),
-      0 0 30px #f56c6c;
-  }
-  100% { 
-    box-shadow: 
-      -100px 0 60px rgba(245, 108, 108, 0.8),
-      0 0 30px #f56c6c;
+    box-shadow: 0 0 50px var(--danger-color), 0 0 100px rgba(199, 80, 80, 0.6);
+    transform: translateX(-50%) scale(1.1);
   }
 }
 
 .siren-body {
-  width: 120px;
-  height: 80px;
-  background: linear-gradient(180deg, #333 0%, #1a1a1a 100%);
-  border-radius: 10px;
+  width: 100px;
+  height: 70px;
+  background: linear-gradient(180deg, #1a1f2e 0%, #0d1118 100%);
+  border-radius: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-top: 50px;
-  border: 3px solid #444;
+  margin-top: 40px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .siren-icon {
-  font-size: 48px;
-  animation: siren-shake 0.1s infinite;
-}
-
-@keyframes siren-shake {
-  0%, 100% { transform: rotate(-5deg); }
-  50% { transform: rotate(5deg); }
+  font-size: 36px;
 }
 
 .alarm-text {
   text-align: center;
-  animation: alarm-pulse 0.5s infinite;
-}
-
-@keyframes alarm-pulse {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.05); }
 }
 
 .alarm-text h2 {
-  font-size: 36px;
-  color: #f56c6c;
-  margin-bottom: 15px;
-  text-shadow: 0 0 20px rgba(245, 108, 108, 0.8);
+  font-size: 28px;
+  color: var(--danger-color);
+  margin-bottom: 16px;
+  font-weight: 600;
+  letter-spacing: 2px;
 }
 
 .alarm-text p {
-  font-size: 24px;
-  color: #fff;
-  margin-bottom: 20px;
+  font-size: 18px;
+  color: var(--text-primary);
+  margin-bottom: 24px;
 }
 
 .alarm-text small {
-  font-size: 14px;
-  color: #909399;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+/* ========================================
+   Element Plus 组件覆盖样式
+   ======================================== */
+
+/* 按钮样式 */
+.el-button {
+  --el-button-bg-color: rgba(58, 145, 199, 0.15);
+  --el-button-border-color: rgba(58, 145, 199, 0.3);
+  --el-button-text-color: var(--primary-color);
+  --el-button-hover-bg-color: rgba(58, 145, 199, 0.25);
+  --el-button-hover-border-color: rgba(58, 145, 199, 0.5);
+  font-weight: 500;
+  transition: all var(--transition-fast) ease;
+}
+
+.el-button--success {
+  --el-button-bg-color: rgba(74, 157, 110, 0.15);
+  --el-button-border-color: rgba(74, 157, 110, 0.3);
+  --el-button-text-color: var(--success-color);
+  --el-button-hover-bg-color: rgba(74, 157, 110, 0.25);
+  --el-button-hover-border-color: rgba(74, 157, 110, 0.5);
+}
+
+.el-button--danger {
+  --el-button-bg-color: rgba(199, 80, 80, 0.15);
+  --el-button-border-color: rgba(199, 80, 80, 0.3);
+  --el-button-text-color: var(--danger-color);
+  --el-button-hover-bg-color: rgba(199, 80, 80, 0.25);
+  --el-button-hover-border-color: rgba(199, 80, 80, 0.5);
+}
+
+.el-button--warning {
+  --el-button-bg-color: rgba(212, 145, 94, 0.15);
+  --el-button-border-color: rgba(212, 145, 94, 0.3);
+  --el-button-text-color: var(--warning-color);
+  --el-button-hover-bg-color: rgba(212, 145, 94, 0.25);
+  --el-button-hover-border-color: rgba(212, 145, 94, 0.5);
+}
+
+.el-button.is-disabled {
+  opacity: 0.4;
+}
+
+/* Radio 样式 */
+.el-radio {
+  --el-radio-text-color: var(--text-secondary);
+  --el-radio-input-border-color: var(--border-color);
+}
+
+.el-radio__input.is-checked .el-radio__inner {
+  background: var(--primary-color);
+  border-color: var(--primary-color);
+}
+
+.el-radio__input.is-checked + .el-radio__label {
+  color: var(--primary-color);
+}
+
+/* Badge 样式 */
+.el-badge__content {
+  background-color: var(--danger-color);
+  border: none;
+}
+
+/* Message 样式 */
+.el-message {
+  --el-message-bg-color: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--border-color);
 }
 </style>

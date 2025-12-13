@@ -4,6 +4,49 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>智能生产线监控系统</title>
+  
+  <!-- 预加载等宽字体 -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  
+  <style>
+    /* 基础重置与全局样式 */
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #0a0f1a;
+      color: rgba(255, 255, 255, 0.92);
+      font-family: 'Microsoft YaHei', 'PingFang SC', -apple-system, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    
+    /* 滚动条全局样式 */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    
+    ::-webkit-scrollbar-track {
+      background: rgba(255, 255, 255, 0.03);
+    }
+    
+    ::-webkit-scrollbar-thumb {
+      background: rgba(58, 145, 199, 0.3);
+      border-radius: 3px;
+    }
+    
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(58, 145, 199, 0.5);
+    }
+    
+    /* 选中文本样式 */
+    ::selection {
+      background: rgba(58, 145, 199, 0.3);
+      color: #fff;
+    }
+  </style>
 </head>
 <body>
   <div id="app"></div>
