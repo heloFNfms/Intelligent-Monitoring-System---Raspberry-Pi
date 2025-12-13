@@ -1,3 +1,15 @@
+# 树莓派端/笔记本电脑端依赖
+
+# YOLOv8目标检测
 ultralytics>=8.0.0
+
+# 图像处理
 opencv-python>=4.8.0
 numpy>=1.24.0
+
+# HTTP请求（数据上报和视频流推送）
+requests>=2.31.0
+aiohttp>=3.9.0
+
+# GPIO控制（仅树莓派需要，Windows上不需要安装）
+# RPi.GPIO>=0.7.1
