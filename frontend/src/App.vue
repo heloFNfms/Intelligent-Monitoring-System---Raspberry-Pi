@@ -227,6 +227,42 @@
             <div class="zone-status">
               {{ inDangerZone ? '⚠️ 危险区域有人!' : '✓ 安全' }}
             </div>
+            <!-- 危险区域实时统计 -->
+            <div class="zone-statistics">
+              <div class="zone-stat-item danger-stat">
+                <span class="stat-icon">🚨</span>
+                <span class="stat-label">当前危险区人数</span>
+                <span class="stat-value">{{ zoneStatistics.current_in_danger }}</span>
+              </div>
+              <div class="zone-stat-row">
+                <div class="zone-stat-item">
+                  <span class="stat-label">进入次数</span>
+                  <span class="stat-value enter">{{ zoneStatistics.total_entries }}</span>
+                </div>
+                <div class="zone-stat-item">
+                  <span class="stat-label">离开次数</span>
+                  <span class="stat-value exit">{{ zoneStatistics.total_exits }}</span>
+                </div>
+              </div>
+              <!-- 一键清除按钮 -->
+              <div class="zone-actions">
+                <el-button type="danger" size="small" plain @click="resetZoneStats(false)">
+                  🔄 重置统计
+                </el-button>
+                <el-button type="warning" size="small" plain @click="resetZoneStats(true)">
+                  🗑️ 清除全部
+                </el-button>
+              </div>
+              <!-- 最后事件时间 -->
+              <div class="zone-last-time" v-if="zoneStatistics.last_entry_time || zoneStatistics.last_exit_time">
+                <small v-if="zoneStatistics.last_entry_time">
+                  最后进入: {{ formatDateTime(zoneStatistics.last_entry_time) }}
+                </small>
+                <small v-if="zoneStatistics.last_exit_time">
+                  最后离开: {{ formatDateTime(zoneStatistics.last_exit_time) }}
+                </small>
+              </div>
+            </div>
           </div>
           
           <!-- 产品检测状态 -->
@@ -353,6 +389,15 @@ const pressureData = ref([])
 // 检测数据
 const personCount = ref(0)
 const inDangerZone = ref(false)
+
+// 危险区域统计
+const zoneStatistics = ref({
+  total_entries: 0,
+  total_exits: 0,
+  current_in_danger: 0,
+  last_entry_time: null,
+  last_exit_time: null
+})
 
 // 检测模式
 const detectionMode = ref('zone')  // zone=安全检测, product=产品检测
@@ -727,6 +772,49 @@ const loadDetectionMode = async () => {
   }
 }
 
+// 加载危险区域统计
+const loadZoneStatistics = async () => {
+  try {
+    const response = await fetch(`/api/zone/statistics/${deviceId.value}`)
+    if (response.ok) {
+      const data = await response.json()
+      zoneStatistics.value = data.statistics
+      inDangerZone.value = data.statistics.current_in_danger > 0
+    }
+  } catch (e) {
+    console.error('加载危险区域统计失败:', e)
+  }
+}
+
+// 重置危险区域统计
+const resetZoneStats = async (clearEvents = false) => {
+  try {
+    const url = `/api/zone/statistics/${deviceId.value}?clear_events=${clearEvents}`
+    const response = await fetch(url, {
+      method: 'DELETE'
+    })
+    if (response.ok) {
+      const data = await response.json()
+      zoneStatistics.value = data.statistics
+      ElMessage.success(data.message)
+    }
+  } catch (e) {
+    ElMessage.error('重置统计失败')
+  }
+}
+
+// 格式化日期时间
+const formatDateTime = (isoString) => {
+  if (!isoString) return ''
+  const date = new Date(isoString)
+  return date.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  })
+}
+
 // 触发报警器
 const triggerAlarm = () => {
   alarmActive.value = true
@@ -843,15 +931,52 @@ const setupWebSocket = async () => {
       activeAlerts.value++
       todayAlerts.value++
       
-      // 如果是入侵报警，触发全屏报警器
-      if (data.alert_type === 'intrusion') {
+      // 如果是入侵报警或进入危险区，触发全屏报警器
+      if (data.alert_type === 'intrusion' || data.alert_type === 'zone_enter') {
         triggerAlarm()
+        dangerEntries.value++
+      } else if (data.alert_type === 'zone_exit') {
+        // 离开危险区，显示提示信息
+        ElMessage({
+          message: data.message,
+          type: 'success',
+          duration: 3000
+        })
       } else {
         // 其他报警只闪烁LED
         ledStatus.value.alert = true
         setTimeout(() => {
           ledStatus.value.alert = false
         }, 5000)
+      }
+    })
+    
+    // 危险区域统计更新
+    wsClient.on('zone_statistics', (data) => {
+      if (data.device_id === deviceId.value) {
+        zoneStatistics.value = data.statistics
+        inDangerZone.value = data.statistics.current_in_danger > 0
+        
+        // 根据事件类型显示不同提示
+        if (data.event_type === 'enter') {
+          ElMessage({
+            message: `🚨 ${data.message}`,
+            type: 'error',
+            duration: 5000
+          })
+        } else if (data.event_type === 'exit') {
+          ElMessage({
+            message: `✅ ${data.message}`,
+            type: 'success',
+            duration: 3000
+          })
+        } else if (data.event_type === 'reset') {
+          ElMessage({
+            message: '📊 危险区域统计已重置',
+            type: 'info',
+            duration: 2000
+          })
+        }
       }
     })
     
@@ -961,6 +1086,7 @@ onMounted(async () => {
   await loadScheduleRules()
   await loadPlanProgress()
   await loadDetectionMode()
+  await loadZoneStatistics()
   await setupWebSocket()
   
   // 窗口大小变化时重绘图表
@@ -1520,6 +1646,100 @@ onUnmounted(() => {
 .detection-status.danger .zone-status {
   color: var(--danger-color);
   font-weight: 600;
+}
+
+/* 危险区域统计 */
+.zone-statistics {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.zone-stat-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.zone-stat-item.danger-stat {
+  background: rgba(199, 80, 80, 0.1);
+  border: 1px solid rgba(199, 80, 80, 0.2);
+  margin-bottom: 12px;
+}
+
+.zone-stat-item .stat-icon {
+  font-size: 18px;
+}
+
+.zone-stat-item .stat-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.zone-stat-item .stat-value {
+  font-size: 20px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  color: var(--danger-color);
+  margin-bottom: 0;
+}
+
+.zone-stat-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.zone-stat-row .zone-stat-item {
+  flex-direction: column;
+  gap: 4px;
+}
+
+.zone-stat-row .stat-value {
+  font-size: 18px;
+}
+
+.zone-stat-row .stat-value.enter {
+  color: var(--danger-color);
+}
+
+.zone-stat-row .stat-value.exit {
+  color: var(--success-color);
+}
+
+/* 危险区域操作按钮 */
+.zone-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.zone-actions .el-button {
+  font-size: 11px;
+  padding: 6px 12px;
+}
+
+/* 最后事件时间 */
+.zone-last-time {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.08);
+}
+
+.zone-last-time small {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-align: center;
 }
 
 /* 统计网格 */

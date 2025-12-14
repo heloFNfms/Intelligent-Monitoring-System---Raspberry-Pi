@@ -9,7 +9,13 @@ from datetime import datetime, timedelta
 from typing import List
 import time
 
-from .database import get_db, init_db, DetectionRecord, SensorData, ProductionStatus, AlertRecord, cleanup_old_data, get_data_statistics, SessionLocal
+from .database import (
+    get_db, init_db, DetectionRecord, SensorData, ProductionStatus, AlertRecord,
+    ZoneStatistics, ZoneEventRecord,
+    cleanup_old_data, get_data_statistics, SessionLocal,
+    get_or_create_zone_statistics, update_zone_statistics, reset_zone_statistics,
+    get_zone_event_history
+)
 from .schemas import (
     DetectionReport, DetectionResponse,
     SensorReport, SensorResponse,
@@ -945,6 +951,160 @@ async def report_product_detection(data: dict):
         "success": True,
         "product_type": product_type
     }
+
+
+# ---------- 危险区域事件API ----------
+@app.post("/api/zone/event", tags=["危险区域"])
+async def report_zone_event(data: dict, db: Session = Depends(get_db)):
+    """
+    上报危险区域事件（进入/离开）- 数据持久化到数据库
+    
+    Body:
+        device_id: 设备ID
+        event_type: 事件类型 (enter=进入危险区, exit=离开危险区)
+        statistics: 统计信息 {total_entries, total_exits, current_in_danger}
+        message: 事件消息
+    """
+    device_id = data.get("device_id", "device_001")
+    event_type = data.get("event_type", "enter")
+    client_stats = data.get("statistics", {})
+    message = data.get("message", "")
+    timestamp = data.get("timestamp", datetime.now().isoformat())
+    
+    # 从客户端统计中获取当前危险区人数
+    current_in_danger = client_stats.get("current_in_danger", 0)
+    
+    # 更新数据库统计信息
+    db_stats = update_zone_statistics(
+        db=db,
+        device_id=device_id,
+        event_type=event_type,
+        current_in_danger=current_in_danger,
+        message=message
+    )
+    
+    # 记录报警（仅进入事件）
+    if event_type == "enter":
+        alert = AlertRecord(
+            device_id=device_id,
+            alert_type="zone_enter",
+            message=message,
+            level="danger"
+        )
+        db.add(alert)
+        db.commit()
+        
+        # 广播进入危险区报警
+        await manager.broadcast_alert(device_id, "zone_enter", message, "danger")
+    else:
+        # 记录离开事件到报警表（info级别）
+        alert = AlertRecord(
+            device_id=device_id,
+            alert_type="zone_exit",
+            message=message,
+            level="info"
+        )
+        db.add(alert)
+        db.commit()
+        
+        # 广播离开危险区通知
+        await manager.broadcast_alert(device_id, "zone_exit", message, "info")
+    
+    # 广播危险区域统计更新
+    await manager.broadcast_to_dashboard({
+        "type": "zone_statistics",
+        "data": {
+            "device_id": device_id,
+            "event_type": event_type,
+            "statistics": db_stats,
+            "message": message
+        },
+        "timestamp": timestamp
+    })
+    
+    return {
+        "success": True,
+        "event_type": event_type,
+        "statistics": db_stats
+    }
+
+
+@app.get("/api/zone/statistics/{device_id}", tags=["危险区域"])
+async def get_zone_statistics_api(device_id: str, db: Session = Depends(get_db)):
+    """获取危险区域统计信息（从数据库）"""
+    stats = get_or_create_zone_statistics(db, device_id)
+    
+    return {
+        "device_id": device_id,
+        "statistics": {
+            "total_entries": stats.total_entries,
+            "total_exits": stats.total_exits,
+            "current_in_danger": stats.current_in_danger,
+            "last_entry_time": stats.last_entry_time.isoformat() if stats.last_entry_time else None,
+            "last_exit_time": stats.last_exit_time.isoformat() if stats.last_exit_time else None
+        }
+    }
+
+
+@app.delete("/api/zone/statistics/{device_id}", tags=["危险区域"])
+async def reset_zone_statistics_api(
+    device_id: str, 
+    clear_events: bool = False,
+    db: Session = Depends(get_db)
+):
+    """
+    重置危险区域统计信息（归零）
+    
+    Args:
+        device_id: 设备ID
+        clear_events: 是否同时清除事件历史记录，默认False
+    """
+    # 重置数据库统计
+    db_stats = reset_zone_statistics(db, device_id, clear_events)
+    
+    # 广播统计重置
+    await manager.broadcast_to_dashboard({
+        "type": "zone_statistics",
+        "data": {
+            "device_id": device_id,
+            "event_type": "reset",
+            "statistics": db_stats,
+            "message": "统计信息已重置"
+        },
+        "timestamp": datetime.now().isoformat()
+    })
+    
+    return {
+        "success": True, 
+        "message": "统计信息已重置" + ("，事件记录已清除" if clear_events else ""),
+        "statistics": db_stats
+    }
+
+
+@app.get("/api/zone/events/{device_id}", tags=["危险区域"])
+async def get_zone_events_api(
+    device_id: str,
+    limit: int = 100,
+    hours: int = None,
+    db: Session = Depends(get_db)
+):
+    """
+    获取危险区域事件历史记录
+    
+    Args:
+        device_id: 设备ID
+        limit: 返回记录数限制，默认100
+        hours: 只返回最近N小时的记录，默认返回全部
+    """
+    events = get_zone_event_history(db, device_id, limit, hours)
+    
+    return {
+        "device_id": device_id,
+        "count": len(events),
+        "events": events
+    }
+    
+    return {"success": True, "message": "统计信息已重置"}
 
 
 # ---------- 检测模式API ----------

@@ -170,6 +170,28 @@ class ConnectionManager:
             },
             "timestamp": datetime.now().isoformat()
         })
+    
+    async def broadcast_zone_event(self, device_id: str, event_type: str, 
+                                   statistics: dict, message: str):
+        """
+        广播危险区域事件
+        
+        Args:
+            device_id: 设备ID
+            event_type: 事件类型 (enter/exit)
+            statistics: 统计信息 {total_entries, total_exits, current_in_danger}
+            message: 事件消息
+        """
+        await self.broadcast_to_dashboard({
+            "type": "zone_event",
+            "data": {
+                "device_id": device_id,
+                "event_type": event_type,
+                "statistics": statistics,
+                "message": message
+            },
+            "timestamp": datetime.now().isoformat()
+        })
 
 
 # 全局连接管理器实例
