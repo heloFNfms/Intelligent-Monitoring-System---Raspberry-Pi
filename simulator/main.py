@@ -1,21 +1,23 @@
 """
-模拟器主程序 - 模拟树莓派设备运行（仅传感器数据）
-危险区域检测使用真实摄像头，请运行 project/zone_detection.py
+模拟器主程序 - 模拟树莓派设备运行
+仅负责传感器数据模拟
 
 使用方法:
     python main.py
 
-这个模拟器模拟传感器数据：
-1. 定时采集传感器数据并上报（温度、湿度、压力）
-2. 定时检查服务器下发的控制指令
-3. 根据运行状态更新生产计数
+这个模拟器模拟：
+1. 传感器数据采集和上报（温度、湿度、压力）
+2. 接收服务器下发的控制指令
+3. 同步生产状态
 
-注意：危险区域检测已移至 project/zone_detection.py，使用真实摄像头
+注意：
+- 传送带和生产计数由后端统一管理，避免重复计算
+- 危险区域检测使用真实摄像头，请运行 project/zone_detection.py
 """
 import asyncio
 import signal
-import sys
-from datetime import datetime
+import time
+import random
 
 from config import (
     SERVER_URL, DEVICE_ID,
@@ -25,8 +27,6 @@ from config import (
 from sensor_simulator import SensorSimulator
 from device_client import DeviceClient
 
-import random
-
 
 class DeviceSimulator:
     """
@@ -35,18 +35,18 @@ class DeviceSimulator:
     包含：
     - 传感器数据采集和上报（温度、湿度、压力）
     - 接收控制指令
-    - 生产计数更新
+    - 同步生产状态
     
-    注意：危险区域检测使用真实摄像头，请运行 project/zone_detection.py
+    注意：传送带和生产计数由后端管理
     """
     
     def __init__(self):
-        # 初始化各模块（不再包含检测模拟器）
+        # 初始化各模块
         self.sensor = SensorSimulator()
         self.client = DeviceClient(SERVER_URL, DEVICE_ID)
         
         # 设备状态
-        self.status = "stopped"  # running/stopped/paused
+        self.status = "stopped"
         self.mode = "product_a"
         self.production_count = 0
         
@@ -58,22 +58,24 @@ class DeviceSimulator:
         self.running = True
         
         print("=" * 60)
-        print("🤖 传感器数据模拟器")
+        print("🤖 智能生产线模拟器")
         print("=" * 60)
         print(f"📡 服务器地址: {SERVER_URL}")
         print(f"🔧 设备ID: {DEVICE_ID}")
         print(f"⏱️  传感器上报间隔: {SENSOR_INTERVAL}秒")
         print()
-        print("📌 注意：危险区域检测请运行 project/zone_detection.py")
+        print("📌 功能：传感器数据模拟（传送带由后端管理）")
+        print("📌 危险区域检测请运行 project/zone_detection.py")
         print("=" * 60)
         print("按 Ctrl+C 停止模拟器")
         print()
         
-        # 启动各个任务（不再包含检测循环）
+        # 启动各个任务
+        # 注意：传送带和生产计数由后端管理，simulator只负责传感器数据
         tasks = [
             asyncio.create_task(self._sensor_loop()),
             asyncio.create_task(self._status_loop()),
-            asyncio.create_task(self._production_loop()),
+            asyncio.create_task(self._sync_production_count()),
         ]
         
         try:
@@ -92,10 +94,8 @@ class DeviceSimulator:
         """传感器数据采集和上报循环"""
         while self.running:
             try:
-                # 读取所有传感器
                 data = self.sensor.read_all()
                 
-                # 上报各传感器数据
                 for sensor_type, reading in data.items():
                     success = await self.client.report_sensor(
                         sensor_type, 
@@ -115,7 +115,6 @@ class DeviceSimulator:
         """状态检查循环 - 接收控制指令"""
         while self.running:
             try:
-                # 从服务器获取最新状态
                 server_status = await self.client.get_status()
                 
                 if server_status:
@@ -123,46 +122,34 @@ class DeviceSimulator:
                     self.status = server_status.get("status", "stopped")
                     self.mode = server_status.get("mode", "product_a")
                     
-                    # 更新传感器模拟器的运行状态
+                    # 更新传感器状态（传送带由后端管理）
                     self.sensor.set_running(self.status == "running")
                     
-                    # 状态变化时打印
                     if old_status != self.status:
                         print(f"📢 状态变更: {old_status} -> {self.status}")
                 
             except Exception as e:
-                pass  # 静默处理状态检查错误
+                pass
             
             await asyncio.sleep(STATUS_CHECK_INTERVAL)
     
-    async def _production_loop(self):
-        """生产计数更新循环"""
+    async def _sync_production_count(self):
+        """同步生产计数（从服务器获取，避免重复计算）"""
         while self.running:
             try:
-                if self.status == "running":
-                    # 模拟生产：随机增加产品数量
-                    increment = random.randint(*PRODUCTION_INCREMENT)
-                    self.production_count += increment
-                    
-                    # 上报生产计数
-                    success = await self.client.update_production_count(
-                        self.production_count
-                    )
-                    
-                    if success:
-                        print(f"�icing 生产: +{increment} 总计={self.production_count}")
-                
+                server_status = await self.client.get_status()
+                if server_status:
+                    self.production_count = server_status.get("production_count", 0)
             except Exception as e:
-                print(f"❌ 生产计数更新错误: {e}")
+                pass
             
-            await asyncio.sleep(STATUS_CHECK_INTERVAL)
+            await asyncio.sleep(STATUS_CHECK_INTERVAL * 2)
 
 
 async def main():
     """主函数"""
     simulator = DeviceSimulator()
     
-    # 设置信号处理
     def signal_handler(sig, frame):
         print("\n\n收到停止信号...")
         simulator.stop()

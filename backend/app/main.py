@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from datetime import datetime, timedelta
 from typing import List
+import time
 
 from .database import get_db, init_db, DetectionRecord, SensorData, ProductionStatus, AlertRecord, cleanup_old_data, get_data_statistics, SessionLocal
 from .schemas import (
@@ -19,6 +20,7 @@ from .schemas import (
 )
 from .websocket_manager import manager
 from .config import settings
+from .conveyor import get_conveyor_manager, conveyor_managers
 
 # 创建FastAPI应用
 app = FastAPI(
@@ -42,6 +44,7 @@ import asyncio
 # 数据清理配置
 DATA_RETENTION_DAYS = 7  # 数据保留天数
 AUTO_CLEANUP_INTERVAL = 3600 * 6  # 自动清理间隔（秒），每6小时清理一次
+CONVEYOR_UPDATE_INTERVAL = 0.05  # 传送带更新间隔（秒），20 FPS
 
 
 async def auto_cleanup_task():
@@ -58,16 +61,84 @@ async def auto_cleanup_task():
             print(f"自动清理失败: {e}")
 
 
+async def conveyor_simulation_task():
+    """传送带模拟后台任务 - 定时更新并广播状态"""
+    last_time = time.time()
+    
+    while True:
+        current_time = time.time()
+        delta_time = current_time - last_time
+        last_time = current_time
+        
+        # 复制字典避免迭代时修改
+        conveyors_copy = dict(conveyor_managers)
+        
+        # 更新所有传送带
+        for device_id, conveyor in conveyors_copy.items():
+            # 只要有传送带管理器就处理（不管是否运行）
+            old_completed = conveyor.completed_count
+            events = conveyor.update(delta_time)
+            
+            # 如果有物品完成，同步更新生产计数
+            if events.get("completed") and conveyor.completed_count > old_completed:
+                db = None
+                try:
+                    db = SessionLocal()
+                    status = db.query(ProductionStatus).filter(
+                        ProductionStatus.device_id == device_id
+                    ).first()
+                    if status:
+                        new_items = conveyor.completed_count - old_completed
+                        status.production_count += new_items
+                        db.commit()
+                        # 广播生产状态更新
+                        await manager.broadcast_status_change(
+                            device_id, status.status, status.mode, status.production_count
+                        )
+                except Exception as e:
+                    print(f"同步生产计数失败: {e}")
+                finally:
+                    if db:
+                        db.close()
+            
+            # 广播传送带更新到前端（只要有连接就广播）
+            if manager.dashboard_connections:
+                await manager.broadcast_conveyor_update(device_id, conveyor.get_state())
+        
+        await asyncio.sleep(CONVEYOR_UPDATE_INTERVAL)
+
+
 @app.on_event("startup")
 async def startup():
     """应用启动时初始化数据库"""
     init_db()
     
+    # 初始化默认设备的传送带管理器，并同步数据库状态
+    default_device = "device_001"
+    db = SessionLocal()
+    try:
+        status = db.query(ProductionStatus).filter(
+            ProductionStatus.device_id == default_device
+        ).first()
+        
+        conveyor = get_conveyor_manager(default_device)
+        if status:
+            conveyor.sync_with_production(status.status, status.mode)
+            print(f"📦 传送带已同步: 状态={status.status}, 模式={status.mode}")
+        else:
+            print(f"📦 传送带已初始化: 设备={default_device}")
+    finally:
+        db.close()
+    
     # 启动自动清理任务
     asyncio.create_task(auto_cleanup_task())
     
+    # 启动传送带模拟任务
+    asyncio.create_task(conveyor_simulation_task())
+    
     print("🚀 智能生产线监控系统已启动")
     print(f"🧹 数据保留 {DATA_RETENTION_DAYS} 天，每 {AUTO_CLEANUP_INTERVAL//3600} 小时自动清理")
+    print(f"🔄 传送带模拟已启动，更新频率: {1/CONVEYOR_UPDATE_INTERVAL:.0f} FPS")
 
 
 # ==================== WebSocket端点 ====================
@@ -390,10 +461,17 @@ async def send_control(command: ControlCommand, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(status)
     
+    # 同步传送带状态
+    conveyor = get_conveyor_manager(device_id)
+    conveyor.sync_with_production(status.status, status.mode)
+    
     # 广播状态变化
     await manager.broadcast_status_change(
         device_id, status.status, status.mode, status.production_count
     )
+    
+    # 立即广播传送带状态
+    await manager.broadcast_conveyor_update(device_id, conveyor.get_state())
     
     # 尝试发送到设备
     await manager.send_to_device(device_id, {
@@ -592,6 +670,65 @@ async def cleanup_data(days_to_keep: int = 7, db: Session = Depends(get_db)):
         "deleted_count": deleted_count,
         "days_kept": days_to_keep
     }
+
+
+# ---------- 传送带API ----------
+@app.get("/api/conveyor/{device_id}", tags=["传送带"])
+async def get_conveyor_state(device_id: str):
+    """获取传送带状态"""
+    conveyor = get_conveyor_manager(device_id)
+    return conveyor.get_state()
+
+
+@app.post("/api/conveyor/{device_id}/control", tags=["传送带"])
+async def control_conveyor(device_id: str, data: dict):
+    """
+    传送带控制
+    
+    Body:
+        command: start/stop/pause/add_item/clear/set_speed
+        params: 可选参数 (如 speed)
+    """
+    conveyor = get_conveyor_manager(device_id)
+    cmd = data.get("command")
+    params = data.get("params", {})
+    
+    result = {"success": True, "command": cmd}
+    
+    if cmd == "start":
+        conveyor.start()
+        result["message"] = "传送带已启动"
+    elif cmd == "stop":
+        conveyor.stop()
+        result["message"] = "传送带已停止"
+    elif cmd == "pause":
+        conveyor.pause()
+        result["message"] = "传送带已暂停"
+    elif cmd == "add_item":
+        item = conveyor.add_item_manual()
+        if item:
+            result["message"] = "已添加物品"
+            result["item"] = item
+        else:
+            result["success"] = False
+            result["message"] = "无法添加物品（传送带已满或入口被占用）"
+    elif cmd == "clear":
+        conveyor.clear_items()
+        result["message"] = "已清空物品"
+    elif cmd == "set_speed":
+        speed = params.get("speed", 1.0)
+        conveyor.set_speed(speed)
+        result["message"] = f"速度已设置为 {conveyor.speed}x"
+    elif cmd == "reset":
+        conveyor.reset()
+        result["message"] = "传送带已重置"
+    else:
+        raise HTTPException(status_code=400, detail=f"未知命令: {cmd}")
+    
+    # 广播状态更新
+    await manager.broadcast_conveyor_update(device_id, conveyor.get_state())
+    
+    return result
 
 
 # ---------- 健康检查 ----------

@@ -147,6 +147,29 @@ class ConnectionManager:
             },
             "timestamp": datetime.now().isoformat()
         })
+    
+    async def broadcast_conveyor_update(self, device_id: str, conveyor_data: dict):
+        """
+        广播传送带状态更新
+        
+        Args:
+            device_id: 设备ID
+            conveyor_data: 传送带数据 {
+                is_running: bool,
+                speed: float,
+                items: list,
+                completed_count: int,
+                product_mode: str
+            }
+        """
+        await self.broadcast_to_dashboard({
+            "type": "conveyor_update",
+            "data": {
+                "device_id": device_id,
+                **conveyor_data
+            },
+            "timestamp": datetime.now().isoformat()
+        })
 
 
 # 全局连接管理器实例

@@ -68,6 +68,11 @@
               <el-radio label="product_b">产品B</el-radio>
             </el-radio-group>
           </div>
+          <div class="speed-control">
+            <span>传送带速度:</span>
+            <el-slider v-model="conveyorSpeed" :min="0.5" :max="2" :step="0.1" 
+                       :format-tooltip="(val) => val + 'x'" @change="setConveyorSpeed" />
+          </div>
         </div>
 
         <!-- 报警列表 -->
@@ -98,16 +103,11 @@
         <div class="card conveyor-card">
           <h3>
             生产线传送带
-            <span class="conveyor-status-badge" :class="{ active: conveyorConnected }">
-              {{ conveyorConnected ? '● 在线' : '○ 离线' }}
+            <span class="conveyor-status-badge" :class="{ active: wsConnected }">
+              {{ wsConnected ? '● 在线' : '○ 离线' }}
             </span>
           </h3>
-          <ConveyorBelt 
-            ref="conveyorRef"
-            @connected="conveyorConnected = true"
-            @disconnected="conveyorConnected = false"
-            @state-change="onConveyorStateChange"
-          />
+          <ConveyorBelt ref="conveyorRef" />
         </div>
 
         <!-- 温度曲线 -->
@@ -217,7 +217,7 @@
 
 
 <script setup>
-import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
 import * as echarts from 'echarts'
 import { ElMessage } from 'element-plus'
 import { getDashboard, sendControl, getAlerts, resolveAlert } from './api'
@@ -228,15 +228,7 @@ const deviceId = ref('device_001')
 
 // 传送带相关
 const conveyorRef = ref(null)
-const conveyorConnected = ref(false)
 
-// 传送带状态变化处理
-const onConveyorStateChange = (state) => {
-  // 同步传送带完成数量到生产计数
-  if (state.completed_count !== undefined) {
-    // 可以选择是否同步到主系统
-  }
-}
 const wsConnected = ref(false)
 const currentTime = ref('')
 
@@ -245,6 +237,7 @@ const productionStatus = ref('stopped')
 const productionMode = ref('product_a')
 const productionCount = ref(0)
 const selectedMode = ref('product_a')
+const conveyorSpeed = ref(1.0)
 
 // 传感器数据
 const currentTemp = ref(null)
@@ -481,6 +474,22 @@ const switchMode = async (mode) => {
   }
 }
 
+// 设置传送带速度
+const setConveyorSpeed = async (speed) => {
+  try {
+    const response = await fetch(`/api/conveyor/${deviceId.value}/control`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: 'set_speed', params: { speed } })
+    })
+    if (response.ok) {
+      ElMessage.success(`速度已设置为 ${speed}x`)
+    }
+  } catch (e) {
+    ElMessage.error('设置速度失败')
+  }
+}
+
 // 处理报警
 const resolveAlertItem = async (alertId) => {
   try {
@@ -665,31 +674,22 @@ const setupWebSocket = async () => {
       }, 5000)
     })
     
+    // 传送带状态更新
+    wsClient.on('conveyor_update', (data) => {
+      if (data.device_id === deviceId.value) {
+        nextTick(() => {
+          if (conveyorRef.value && typeof conveyorRef.value.updateState === 'function') {
+            conveyorRef.value.updateState(data)
+          }
+        })
+      }
+    })
+    
   } catch (e) {
     console.error('WebSocket连接失败:', e)
     wsConnected.value = false
   }
 }
-
-// 监听生产状态变化，同步到传送带
-watch(productionStatus, (newStatus) => {
-  if (conveyorRef.value) {
-    if (newStatus === 'running') {
-      conveyorRef.value.start()
-    } else if (newStatus === 'stopped') {
-      conveyorRef.value.stop()
-    } else if (newStatus === 'paused') {
-      conveyorRef.value.pause()
-    }
-  }
-})
-
-// 监听模式变化，同步到传送带
-watch(selectedMode, (newMode) => {
-  if (conveyorRef.value) {
-    conveyorRef.value.setMode(newMode)
-  }
-})
 
 // 生命周期
 let timeInterval = null
@@ -997,6 +997,21 @@ onUnmounted(() => {
   gap: 12px;
   color: var(--text-secondary);
   font-size: 13px;
+}
+
+.speed-control {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.speed-control .el-slider {
+  flex: 1;
+  --el-slider-main-bg-color: var(--primary-color);
+  --el-slider-runway-bg-color: rgba(58, 145, 199, 0.2);
 }
 
 /* 报警列表 */

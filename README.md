@@ -5,31 +5,48 @@
 ## 系统架构
 
 ```
-树莓派端 (摄像头检测/传感器)
-        │
-        │ HTTP/WebSocket
-        ▼
-后端服务 (FastAPI + MySQL)
-        │
-        │ WebSocket
-        ▼
-前端大屏 (Vue3 + ECharts)
+┌─────────────────────────────────────────────────────────────┐
+│                      前端 (Vue3)                            │
+│  - 实时监控大屏（温度曲线、生产状态、报警）                    │
+│  - 传送带可视化动画                                          │
+│  - 远程控制面板                                              │
+└─────────────────────┬───────────────────────────────────────┘
+                      │ WebSocket + HTTP API
+                      ▼
+┌─────────────────────────────────────────────────────────────┐
+│                 后端服务 (FastAPI + MySQL)                   │
+│  - 数据聚合与存储                                            │
+│  - WebSocket 实时广播                                        │
+│  - 控制指令下发                                              │
+│  - 传送带状态管理                                            │
+└─────────────────────┬───────────────────────────────────────┘
+                      │ HTTP API
+                      ▼
+┌─────────────────────────────────────────────────────────────┐
+│              设备层 (树莓派 / 模拟器)                         │
+│                                                             │
+│  【开发阶段】simulator/ → 模拟传感器 + 传送带数据              │
+│  【部署阶段】树莓派 → 真实传感器 + 摄像头检测                   │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ## 功能模块
 
-### 1. 生产线模块（树莓派端）
+### 1. 生产线模块（树莓派端 / 模拟器）
 - ✅ 目标检测：YOLOv8检测人员进入危险区域
 - ✅ 传感器数据采集：温度、压力、湿度
+- ✅ 传送带模拟：物品生成、移动、完成计数
 - ✅ 报警控制：LED灯、蜂鸣器
 
 ### 2. 中心控制与数据服务模块（后端）
 - ✅ 数据聚合：接收并存储设备数据
 - ✅ 控制指令：下发启动/停止/切换模式指令
+- ✅ 传送带管理：状态同步、物品追踪
 - ✅ API服务：提供REST API和WebSocket
 
 ### 3. 可视化与管理界面（前端）
 - ✅ 实时监控大屏：温度曲线、生产状态
+- ✅ 传送带可视化：动态显示物品移动
 - ✅ 报警管理：报警列表、处理报警
 - ✅ 远程控制：启动/停止/切换模式
 
@@ -77,7 +94,7 @@ pip install aiohttp
 python main.py
 ```
 
-模拟器会自动上报传感器数据和检测结果，完全模拟树莓派行为。
+模拟器会自动上报传感器数据，后端会自动管理传送带状态。
 
 ## 项目结构
 
@@ -87,7 +104,8 @@ python main.py
 │   │   ├── main.py         # FastAPI主应用（所有API接口）
 │   │   ├── database.py     # 数据库模型定义
 │   │   ├── schemas.py      # 请求/响应数据模型
-│   │   ├── config.py       # 配置文件（数据库密码等）
+│   │   ├── config.py       # 配置文件
+│   │   ├── conveyor.py     # 传送带管理器
 │   │   └── websocket_manager.py  # WebSocket连接管理
 │   ├── run.py              # 启动脚本
 │   ├── init_db.sql         # 数据库初始化SQL
@@ -96,19 +114,21 @@ python main.py
 ├── frontend/               # 前端应用 (Vue3)
 │   ├── src/
 │   │   ├── App.vue        # 监控大屏主界面
+│   │   ├── components/    # 组件
+│   │   │   └── ConveyorBelt.vue  # 传送带可视化组件
 │   │   ├── api/           # API接口封装
 │   │   └── utils/         # WebSocket工具
 │   ├── package.json
 │   └── vite.config.js
 │
-├── simulator/              # 设备模拟器（独立服务）
+├── simulator/              # 设备模拟器（开发测试用）
 │   ├── main.py            # 模拟器主程序
 │   ├── sensor_simulator.py    # 传感器模拟
-│   ├── detection_simulator.py # 检测模拟
+│   ├── conveyor_simulator.py  # 传送带模拟
 │   ├── device_client.py   # 设备通信客户端
 │   └── config.py          # 模拟器配置
 │
-├── project/                # 树莓派端代码
+├── project/                # 树莓派端代码（部署用）
 │   ├── zone_detection.py  # YOLOv8区域检测
 │   └── device_client.py   # 设备通信客户端
 │
@@ -125,6 +145,28 @@ python main.py
 | 前端 | Vue3 + Element Plus + ECharts |
 | 通信 | HTTP REST + WebSocket |
 | 检测 | YOLOv8 + OpenCV |
+
+## API 接口
+
+### 传送带相关
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/conveyor/{device_id}` | 获取传送带状态 |
+| POST | `/api/conveyor/{device_id}/control` | 控制传送带 |
+
+### 控制指令
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/control` | 发送控制指令（启动/停止/暂停/切换模式） |
+
+### WebSocket 消息类型
+| 类型 | 说明 |
+|------|------|
+| `sensor_update` | 传感器数据更新 |
+| `status_change` | 生产状态变化 |
+| `conveyor_update` | 传送带状态更新 |
+| `alert` | 报警信息 |
+| `video_frame` | 视频帧 |
 
 ## 配置说明
 
@@ -146,9 +188,10 @@ TEMP_DANGER_THRESHOLD = 95.0   # 温度危险阈值
 
 ## 树莓派部署
 
-1. 将 `project/zone_detection.py` 复制到树莓派
-2. 安装依赖：`pip install ultralytics opencv-python requests`
-3. 修改服务器地址后运行
+1. 将 `project/` 目录复制到树莓派
+2. 安装依赖：`pip install ultralytics opencv-python aiohttp`
+3. 修改 `device_client.py` 中的服务器地址
+4. 运行 `python zone_detection.py`
 
 ## 提交内容
 
