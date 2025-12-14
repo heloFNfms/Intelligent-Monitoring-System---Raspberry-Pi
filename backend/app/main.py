@@ -23,6 +23,21 @@ from .config import settings
 from .conveyor import get_conveyor_manager, conveyor_managers
 from .scheduler import get_scheduler, scheduler_manager
 
+# 检测模式管理（zone=危险区域检测, product=产品检测）
+detection_modes = {}  # device_id -> mode
+
+
+def get_detection_mode(device_id: str) -> str:
+    """获取设备的检测模式"""
+    return detection_modes.get(device_id, "zone")
+
+
+def set_detection_mode(device_id: str, mode: str):
+    """设置设备的检测模式"""
+    if mode in ["zone", "product"]:
+        detection_modes[device_id] = mode
+
+
 # 创建FastAPI应用
 app = FastAPI(
     title="智能生产线监控系统",
@@ -930,6 +945,41 @@ async def report_product_detection(data: dict):
         "success": True,
         "product_type": product_type
     }
+
+
+# ---------- 检测模式API ----------
+@app.get("/api/detection/mode/{device_id}", tags=["检测模式"])
+async def get_device_detection_mode(device_id: str):
+    """获取设备的检测模式"""
+    mode = get_detection_mode(device_id)
+    return {"device_id": device_id, "mode": mode}
+
+
+@app.put("/api/detection/mode/{device_id}", tags=["检测模式"])
+async def set_device_detection_mode(device_id: str, data: dict):
+    """
+    设置设备的检测模式
+    
+    Body:
+        mode: str - 检测模式 (zone=危险区域检测, product=产品检测)
+    """
+    mode = data.get("mode", "zone")
+    if mode not in ["zone", "product"]:
+        raise HTTPException(status_code=400, detail="无效的检测模式，必须是 zone 或 product")
+    
+    set_detection_mode(device_id, mode)
+    
+    # 广播模式变化到前端
+    await manager.broadcast_to_dashboard({
+        "type": "detection_mode_change",
+        "data": {
+            "device_id": device_id,
+            "mode": mode
+        },
+        "timestamp": datetime.now().isoformat()
+    })
+    
+    return {"success": True, "device_id": device_id, "mode": mode}
 
 
 # ---------- 健康检查 ----------

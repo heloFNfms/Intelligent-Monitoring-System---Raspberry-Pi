@@ -135,8 +135,9 @@ python main.py
 │   └── config.py          # 模拟器配置
 │
 ├── project/                # 树莓派端代码（部署用）
-│   ├── zone_detection.py  # YOLOv8区域检测（人员安全）
-│   ├── product_detection.py  # 产品检测（颜色/形状识别）
+│   ├── unified_detection.py  # 统一检测系统（推荐使用）
+│   ├── zone_detection.py  # YOLOv8区域检测（独立版）
+│   ├── product_detection.py  # 产品检测（独立版）
 │   └── device_client.py   # 设备通信客户端
 │
 └── docs/                   # 文档
@@ -214,20 +215,30 @@ TEMP_DANGER_THRESHOLD = 95.0   # 温度危险阈值
 
 1. 将 `project/` 目录复制到树莓派
 2. 安装依赖：`pip install ultralytics opencv-python aiohttp requests numpy`
-3. 修改 `device_client.py` 中的服务器地址
-4. 运行检测程序：
-   - 人员安全检测：`python zone_detection.py`
-   - 产品检测：`python product_detection.py`
+3. 修改 `unified_detection.py` 中的服务器地址
+4. 运行统一检测程序：`python unified_detection.py`
 
-### 产品检测说明
-产品检测功能用于识别传送带上物品的颜色和形状：
+### 统一检测系统说明
+统一检测系统整合了危险区域检测和产品检测，共享同一个摄像头：
+
+**检测模式：**
+- **安全检测模式**：检测人员是否进入危险区域（默认模式）
+- **产品检测模式**：识别传送带上物品的颜色和形状
+
+**产品类型：**
 - **产品A**: 蓝色 + 方形
 - **产品B**: 青色 + 圆形
 
-操作方式：
-- 按 `c` 键手动捕获检测
-- 按 `r` 键重置计数
+**操作方式：**
+- 按 `1` 键切换到安全检测模式
+- 按 `2` 键切换到产品检测模式
+- 按 `c` 键手动捕获产品（产品模式下）
+- 按 `r` 键重置产品计数
 - 按 `q` 键退出程序
+
+**前端控制：**
+- 在前端界面的"区域检测"卡片中可以切换检测模式
+- 切换后会自动同步到树莓派端
 
 ## 自动调度功能
 

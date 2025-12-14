@@ -195,11 +195,19 @@
         <!-- 检测状态 + 视频流 -->
         <div class="card detection-card">
           <h3>
-            区域检测
+            {{ detectionMode === 'zone' ? '区域检测' : '产品检测' }}
             <span class="video-status" :class="{ active: videoConnected }">
               {{ videoConnected ? '📹 直播中' : '📹 等待连接' }}
             </span>
           </h3>
+          
+          <!-- 检测模式切换 -->
+          <div class="detection-mode-switch">
+            <el-radio-group v-model="detectionMode" size="small" @change="switchDetectionMode">
+              <el-radio-button label="zone">安全检测</el-radio-button>
+              <el-radio-button label="product">产品检测</el-radio-button>
+            </el-radio-group>
+          </div>
           
           <!-- 视频流显示 -->
           <div class="video-container">
@@ -207,16 +215,31 @@
                  class="video-frame" alt="实时监控" />
             <div v-else class="video-placeholder">
               <span>等待视频流...</span>
-              <small>请运行 zone_detection.py</small>
+              <small>请运行 unified_detection.py</small>
             </div>
           </div>
           
-          <div class="detection-status" :class="{ danger: inDangerZone }">
+          <!-- 区域检测状态 -->
+          <div v-if="detectionMode === 'zone'" class="detection-status" :class="{ danger: inDangerZone }">
             <div class="person-count">
               检测人数: <strong>{{ personCount }}</strong>
             </div>
             <div class="zone-status">
               {{ inDangerZone ? '⚠️ 危险区域有人!' : '✓ 安全' }}
+            </div>
+          </div>
+          
+          <!-- 产品检测状态 -->
+          <div v-else class="detection-status product-status">
+            <div class="product-result" v-if="lastProductDetection">
+              <span class="product-type" :class="lastProductDetection.product_type">
+                {{ lastProductDetection.product_type === 'product_a' ? '产品A' : 
+                   lastProductDetection.product_type === 'product_b' ? '产品B' : '未知' }}
+              </span>
+              <span class="product-info">{{ lastProductDetection.color }} | {{ lastProductDetection.shape }}</span>
+            </div>
+            <div v-else class="no-product">
+              等待检测产品...
             </div>
           </div>
         </div>
@@ -330,6 +353,10 @@ const pressureData = ref([])
 // 检测数据
 const personCount = ref(0)
 const inDangerZone = ref(false)
+
+// 检测模式
+const detectionMode = ref('zone')  // zone=安全检测, product=产品检测
+const lastProductDetection = ref(null)
 
 // 视频流数据
 const videoFrame = ref(null)
@@ -671,6 +698,35 @@ const loadScheduleRules = async () => {
   }
 }
 
+// 切换检测模式
+const switchDetectionMode = async (mode) => {
+  try {
+    const response = await fetch(`/api/detection/mode/${deviceId.value}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode })
+    })
+    if (response.ok) {
+      ElMessage.success(`已切换到${mode === 'zone' ? '安全检测' : '产品检测'}模式`)
+    }
+  } catch (e) {
+    ElMessage.error('切换模式失败')
+  }
+}
+
+// 加载检测模式
+const loadDetectionMode = async () => {
+  try {
+    const response = await fetch(`/api/detection/mode/${deviceId.value}`)
+    if (response.ok) {
+      const data = await response.json()
+      detectionMode.value = data.mode
+    }
+  } catch (e) {
+    console.error('加载检测模式失败:', e)
+  }
+}
+
 // 触发报警器
 const triggerAlarm = () => {
   alarmActive.value = true
@@ -825,6 +881,25 @@ const setupWebSocket = async () => {
       })
     })
     
+    // 产品检测结果
+    wsClient.on('product_detection', (data) => {
+      if (data.device_id === deviceId.value) {
+        lastProductDetection.value = {
+          product_type: data.product_type,
+          color: data.color,
+          shape: data.shape,
+          confidence: data.confidence
+        }
+      }
+    })
+    
+    // 检测模式变化
+    wsClient.on('detection_mode_change', (data) => {
+      if (data.device_id === deviceId.value) {
+        detectionMode.value = data.mode
+      }
+    })
+    
     // LED状态更新（来自开发板）
     wsClient.on('led_status', (data) => {
       if (data.led_type === 'alert') {
@@ -885,6 +960,7 @@ onMounted(async () => {
   await loadAlerts()
   await loadScheduleRules()
   await loadPlanProgress()
+  await loadDetectionMode()
   await setupWebSocket()
   
   // 窗口大小变化时重绘图表
@@ -1868,5 +1944,71 @@ onUnmounted(() => {
 /* Switch 样式 */
 .el-switch {
   --el-switch-on-color: var(--primary-color);
+}
+
+/* ========================================
+   检测模式切换
+   ======================================== */
+.detection-mode-switch {
+  margin-bottom: 12px;
+  display: flex;
+  justify-content: center;
+}
+
+.detection-mode-switch .el-radio-group {
+  --el-radio-button-checked-bg-color: var(--primary-color);
+  --el-radio-button-checked-border-color: var(--primary-color);
+}
+
+.detection-mode-switch .el-radio-button__inner {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--border-color);
+  color: var(--text-secondary);
+}
+
+.detection-mode-switch .el-radio-button__original-radio:checked + .el-radio-button__inner {
+  background: var(--primary-color);
+  border-color: var(--primary-color);
+  color: white;
+}
+
+/* 产品检测状态 */
+.product-status {
+  background: rgba(58, 145, 199, 0.08) !important;
+  border-color: rgba(58, 145, 199, 0.2) !important;
+}
+
+.product-result {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.product-type {
+  font-size: 18px;
+  font-weight: 600;
+  padding: 6px 16px;
+  border-radius: 4px;
+}
+
+.product-type.product_a {
+  background: rgba(58, 145, 199, 0.2);
+  color: #5ba8d9;
+}
+
+.product-type.product_b {
+  background: rgba(45, 183, 181, 0.2);
+  color: #4dcfcd;
+}
+
+.product-info {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.no-product {
+  color: var(--text-muted);
+  font-size: 13px;
 }
 </style>

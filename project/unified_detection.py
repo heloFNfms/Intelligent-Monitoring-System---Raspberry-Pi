@@ -1,0 +1,765 @@
+"""
+统一检测系统 - 整合危险区域检测和产品检测
+功能：
+1. 默认运行危险区域检测（人员安全监控）
+2. 支持切换到产品检测模式（颜色/形状识别）
+3. 通过后端API或键盘控制模式切换
+4. 共享同一个摄像头，避免资源冲突
+
+适用于：树莓派 / Windows 笔记本
+"""
+
+import cv2
+import numpy as np
+from ultralytics import YOLO
+from datetime import datetime
+from dataclasses import dataclass
+from typing import List, Tuple, Callable, Optional, Dict
+from enum import Enum
+import time
+import threading
+import platform
+import subprocess
+import base64
+import requests
+
+# ==================== 系统检测 ====================
+IS_WINDOWS = platform.system() == "Windows"
+IS_LINUX = platform.system() == "Linux"
+
+if IS_WINDOWS:
+    import winsound
+
+# ==================== 配置 ====================
+SERVER_URL = "http://localhost:8000"
+DEVICE_ID = "device_001"
+ENABLE_SERVER_REPORT = True
+ENABLE_VIDEO_STREAM = True
+VIDEO_STREAM_FPS = 10
+VIDEO_QUALITY = 50
+
+CAMERA_WIDTH = 640
+CAMERA_HEIGHT = 480
+
+
+class DetectionMode(Enum):
+    """检测模式"""
+    ZONE = "zone"           # 危险区域检测
+    PRODUCT = "product"     # 产品检测
+
+
+@dataclass
+class AlertInfo:
+    """警报信息"""
+    timestamp: str
+    zone_type: str
+    person_count: int
+    message: str
+    bbox: Tuple[int, int, int, int]
+
+
+# ==================== 服务器通信 ====================
+class ServerClient:
+    """服务器通信客户端"""
+    
+    def __init__(self, server_url: str, device_id: str):
+        self.server_url = server_url.rstrip('/')
+        self.device_id = device_id
+        self._current_mode = DetectionMode.ZONE
+        self._mode_lock = threading.Lock()
+    
+    def get_detection_mode(self) -> DetectionMode:
+        """从服务器获取当前检测模式"""
+        try:
+            response = requests.get(
+                f"{self.server_url}/api/detection/mode/{self.device_id}",
+                timeout=1
+            )
+            if response.status_code == 200:
+                data = response.json()
+                mode_str = data.get("mode", "zone")
+                return DetectionMode.PRODUCT if mode_str == "product" else DetectionMode.ZONE
+        except Exception:
+            pass
+        return self._current_mode
+    
+    def report_detection(self, person_count: int, in_danger_zone: bool, alert_triggered: bool):
+        """上报危险区域检测结果"""
+        try:
+            data = {
+                "device_id": self.device_id,
+                "person_count": person_count,
+                "in_danger_zone": in_danger_zone,
+                "alert_triggered": alert_triggered
+            }
+            requests.post(f"{self.server_url}/api/detection", json=data, timeout=2)
+        except Exception:
+            pass
+    
+    def report_product(self, result: Dict):
+        """上报产品检测结果"""
+        try:
+            data = {
+                "device_id": self.device_id,
+                "product_type": result.get("product_type", "unknown"),
+                "color": result.get("color", ""),
+                "shape": result.get("shape", ""),
+                "confidence": result.get("confidence", 0),
+                "timestamp": datetime.now().isoformat()
+            }
+            requests.post(f"{self.server_url}/api/product/detection", json=data, timeout=2)
+        except Exception:
+            pass
+    
+    def send_video_frame(self, frame: np.ndarray, detection_info: dict = None):
+        """发送视频帧"""
+        try:
+            encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), VIDEO_QUALITY]
+            _, buffer = cv2.imencode('.jpg', frame, encode_param)
+            frame_base64 = base64.b64encode(buffer).decode('utf-8')
+            
+            data = {
+                "device_id": self.device_id,
+                "frame": frame_base64,
+                "timestamp": datetime.now().isoformat(),
+                "detection": detection_info
+            }
+            requests.post(f"{self.server_url}/api/video/frame", json=data, timeout=1)
+        except Exception:
+            pass
+
+
+# ==================== 危险区域检测器 ====================
+class ZoneDetector:
+    """危险区域检测器 - 基于YOLOv8"""
+    
+    def __init__(self, model_path: str = "yolov8n.pt", frame_skip: int = 3,
+                 input_size: Tuple[int, int] = (320, 320), alert_cooldown: float = 3.0):
+        print("正在加载YOLOv8模型...")
+        self.model = YOLO(model_path)
+        self.model.fuse()
+        
+        self.danger_zones: List[np.ndarray] = []
+        self.safe_zones: List[np.ndarray] = []
+        self.alert_callback: Optional[Callable] = None
+        self.person_class_id = 0
+        
+        self.frame_skip = frame_skip
+        self.frame_count = 0
+        self.input_size = input_size
+        self.alert_cooldown = alert_cooldown
+        self.last_alert_time = {}
+        self.last_detections = []
+        self.scale_x = 1.0
+        self.scale_y = 1.0
+        
+        print(f"✓ YOLOv8模型加载完成")
+    
+    def add_danger_zone(self, points: List[Tuple[int, int]]):
+        self.danger_zones.append(np.array(points, dtype=np.int32))
+    
+    def add_safe_zone(self, points: List[Tuple[int, int]]):
+        self.safe_zones.append(np.array(points, dtype=np.int32))
+    
+    def set_alert_callback(self, callback: Callable):
+        self.alert_callback = callback
+    
+    def _point_in_zone(self, point: Tuple[int, int], zone: np.ndarray) -> bool:
+        return cv2.pointPolygonTest(zone, point, False) >= 0
+    
+    def _get_person_center(self, bbox: Tuple[int, int, int, int]) -> Tuple[int, int]:
+        x1, y1, x2, y2 = bbox
+        return (int((x1 + x2) / 2), int(y2))
+    
+    def _should_send_alert(self, zone_id: str) -> bool:
+        current_time = time.time()
+        if zone_id not in self.last_alert_time:
+            self.last_alert_time[zone_id] = current_time
+            return True
+        if current_time - self.last_alert_time[zone_id] > self.alert_cooldown:
+            self.last_alert_time[zone_id] = current_time
+            return True
+        return False
+    
+    def detect(self, frame: np.ndarray, conf_threshold: float = 0.5) -> Tuple[np.ndarray, dict]:
+        """执行危险区域检测"""
+        h_orig, w_orig = frame.shape[:2]
+        output = frame.copy()
+        
+        self.frame_count += 1
+        should_detect = (self.frame_count % self.frame_skip == 0)
+        
+        # YOLO检测
+        if should_detect:
+            if self.input_size:
+                resized = cv2.resize(frame, self.input_size)
+                self.scale_x = w_orig / self.input_size[0]
+                self.scale_y = h_orig / self.input_size[1]
+            else:
+                resized = frame
+                self.scale_x = self.scale_y = 1.0
+            
+            results = self.model(resized, conf=conf_threshold, classes=[self.person_class_id],
+                               verbose=False, device='cpu')
+            
+            self.last_detections = []
+            for result in results:
+                for box in result.boxes:
+                    x1, y1, x2, y2 = map(int, box.xyxy[0].cpu().numpy())
+                    conf = float(box.conf[0])
+                    x1, y1 = int(x1 * self.scale_x), int(y1 * self.scale_y)
+                    x2, y2 = int(x2 * self.scale_x), int(y2 * self.scale_y)
+                    self.last_detections.append((x1, y1, x2, y2, conf))
+        
+        # 绘制区域
+        overlay = output.copy()
+        for zone in self.danger_zones:
+            cv2.fillPoly(overlay, [zone], (0, 0, 200))
+            cv2.polylines(output, [zone], True, (0, 0, 255), 2)
+        for zone in self.safe_zones:
+            cv2.fillPoly(overlay, [zone], (0, 200, 0))
+            cv2.polylines(output, [zone], True, (0, 255, 0), 2)
+        cv2.addWeighted(overlay, 0.3, output, 0.7, 0, output)
+        
+        # 绘制警戒线
+        mid_x = w_orig // 2
+        cv2.line(output, (mid_x, 0), (mid_x, h_orig), (0, 255, 255), 2)
+        cv2.putText(output, "WARNING LINE", (mid_x + 10, 30),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+        
+        # 处理检测结果
+        danger_count = 0
+        person_count = len(self.last_detections)
+        in_danger_zone = False
+        
+        for detection in self.last_detections:
+            x1, y1, x2, y2, conf = detection
+            center = self._get_person_center((x1, y1, x2, y2))
+            in_danger = any(self._point_in_zone(center, zone) for zone in self.danger_zones)
+            
+            if in_danger:
+                danger_count += 1
+                in_danger_zone = True
+                color = (0, 0, 255)
+                label = "DANGER!"
+                
+                # 触发报警
+                if should_detect and self._should_send_alert("danger_0"):
+                    if self.alert_callback:
+                        alert = AlertInfo(
+                            timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            zone_type="danger",
+                            person_count=1,
+                            message="检测到人员进入危险区域！",
+                            bbox=(x1, y1, x2, y2)
+                        )
+                        self.alert_callback(alert)
+            else:
+                color = (0, 255, 0)
+                label = "Person"
+            
+            cv2.rectangle(output, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(output, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+            cv2.circle(output, center, 4, color, -1)
+        
+        # 显示信息
+        if danger_count > 0:
+            cv2.putText(output, f"WARNING: {danger_count} in DANGER ZONE!", (10, 30),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+        cv2.putText(output, f"Persons: {person_count}", (10, 60),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        
+        # 模式标识
+        cv2.putText(output, "[ZONE MODE]", (w_orig - 150, 30),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+        
+        detection_info = {
+            "mode": "zone",
+            "person_count": person_count,
+            "in_danger_zone": in_danger_zone,
+            "alert_triggered": danger_count > 0 and should_detect
+        }
+        
+        return output, detection_info
+
+
+# ==================== 产品检测器 ====================
+class ProductDetector:
+    """产品检测器 - 基于颜色和形状"""
+    
+    COLOR_RANGES = {
+        "product_a": {
+            "lower": np.array([100, 100, 100]),
+            "upper": np.array([130, 255, 255]),
+            "name": "蓝色",
+            "display_color": (255, 150, 50)
+        },
+        "product_b": {
+            "lower": np.array([75, 100, 100]),
+            "upper": np.array([95, 255, 255]),
+            "name": "青色",
+            "display_color": (200, 200, 50)
+        }
+    }
+    
+    SHAPE_CIRCULARITY_THRESHOLD = 0.7
+    MIN_CONTOUR_AREA = 1000
+    MAX_CONTOUR_AREA = 100000
+    
+    def __init__(self):
+        self.detection_count = {"product_a": 0, "product_b": 0, "unknown": 0}
+        self.last_detection_time = 0
+        self.detection_cooldown = 1.0
+        print("✓ 产品检测器初始化完成")
+    
+    def detect_color(self, frame: np.ndarray) -> Tuple[str, np.ndarray]:
+        """检测颜色"""
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        best_match = "unknown"
+        best_area = 0
+        best_mask = None
+        
+        for product_type, color_range in self.COLOR_RANGES.items():
+            mask = cv2.inRange(hsv, color_range["lower"], color_range["upper"])
+            kernel = np.ones((5, 5), np.uint8)
+            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+            area = cv2.countNonZero(mask)
+            
+            if area > best_area and area > self.MIN_CONTOUR_AREA:
+                best_area = area
+                best_match = product_type
+                best_mask = mask
+        
+        return best_match, best_mask if best_mask is not None else np.zeros_like(frame[:,:,0])
+    
+    def detect_shape(self, mask: np.ndarray) -> Tuple[str, List[np.ndarray]]:
+        """检测形状"""
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return "unknown", []
+        
+        valid_contours = [c for c in contours
+                        if self.MIN_CONTOUR_AREA < cv2.contourArea(c) < self.MAX_CONTOUR_AREA]
+        if not valid_contours:
+            return "unknown", []
+        
+        largest = max(valid_contours, key=cv2.contourArea)
+        area = cv2.contourArea(largest)
+        perimeter = cv2.arcLength(largest, True)
+        
+        if perimeter == 0:
+            return "unknown", valid_contours
+        
+        circularity = 4 * np.pi * area / (perimeter * perimeter)
+        shape = "circle" if circularity > self.SHAPE_CIRCULARITY_THRESHOLD else "rectangle"
+        return shape, valid_contours
+    
+    def detect(self, frame: np.ndarray) -> Tuple[np.ndarray, dict]:
+        """执行产品检测"""
+        output = frame.copy()
+        h, w = output.shape[:2]
+        
+        # 颜色检测
+        color_type, mask = self.detect_color(frame)
+        
+        # 形状检测
+        shape_type, contours = self.detect_shape(mask)
+        
+        # 综合判断
+        result = {
+            "mode": "product",
+            "detected": False,
+            "product_type": "unknown",
+            "color": "unknown",
+            "shape": "unknown",
+            "confidence": 0.0
+        }
+        
+        if color_type != "unknown" and shape_type != "unknown":
+            if color_type == "product_a" and shape_type == "rectangle":
+                product_type, confidence = "product_a", 0.9
+            elif color_type == "product_b" and shape_type == "circle":
+                product_type, confidence = "product_b", 0.9
+            elif color_type in ["product_a", "product_b"]:
+                product_type, confidence = color_type, 0.7
+            else:
+                product_type, confidence = "unknown", 0.3
+            
+            result.update({
+                "detected": True,
+                "product_type": product_type,
+                "color": self.COLOR_RANGES.get(color_type, {}).get("name", "未知"),
+                "shape": "圆形" if shape_type == "circle" else "方形",
+                "confidence": confidence
+            })
+            
+            # 绘制轮廓
+            if contours:
+                color = self.COLOR_RANGES.get(color_type, {}).get("display_color", (128, 128, 128))
+                cv2.drawContours(output, contours, -1, color, 3)
+                
+                largest = max(contours, key=cv2.contourArea)
+                x, y, bw, bh = cv2.boundingRect(largest)
+                cv2.rectangle(output, (x, y), (x+bw, y+bh), color, 2)
+                
+                label = f"Product {'A' if product_type == 'product_a' else 'B'}"
+                cv2.putText(output, label, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+                cv2.putText(output, f"Conf: {confidence:.0%}", (x, y+bh+20),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+        
+        # 绘制检测区域
+        cv2.rectangle(output, (50, 50), (w-50, h-50), (100, 100, 100), 2)
+        cv2.putText(output, "Detection Area", (55, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 100, 100), 1)
+        
+        # 统计信息
+        cv2.putText(output, f"Product A: {self.detection_count['product_a']}", (10, 30),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, self.COLOR_RANGES["product_a"]["display_color"], 2)
+        cv2.putText(output, f"Product B: {self.detection_count['product_b']}", (10, 55),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, self.COLOR_RANGES["product_b"]["display_color"], 2)
+        
+        # 模式标识
+        cv2.putText(output, "[PRODUCT MODE]", (w - 180, 30),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 150, 50), 2)
+        
+        return output, result
+    
+    def capture(self, frame: np.ndarray) -> Optional[dict]:
+        """手动捕获检测"""
+        current_time = time.time()
+        if current_time - self.last_detection_time < self.detection_cooldown:
+            return None
+        
+        _, result = self.detect(frame)
+        if result["detected"] and result["product_type"] != "unknown":
+            self.last_detection_time = current_time
+            self.detection_count[result["product_type"]] += 1
+            print(f"\n📦 检测到产品: {result['product_type']} | {result['color']} | {result['shape']}")
+            return result
+        return None
+    
+    def reset_count(self):
+        """重置计数"""
+        self.detection_count = {"product_a": 0, "product_b": 0, "unknown": 0}
+        print("✓ 产品计数已重置")
+
+
+
+# ==================== GPIO控制器 ====================
+class GPIOController:
+    """GPIO控制器 - 管理LED和蜂鸣器"""
+    
+    def __init__(self, led_pin: int = 16, buzzer_pin: int = 18):
+        self.led_pin = led_pin
+        self.buzzer_pin = buzzer_pin
+        self.gpio_initialized = False
+        self.led_state = False
+        
+        if IS_LINUX:
+            try:
+                import RPi.GPIO as GPIO
+                self.GPIO = GPIO
+                GPIO.setmode(GPIO.BCM)
+                GPIO.setwarnings(False)
+                GPIO.setup(self.led_pin, GPIO.OUT)
+                GPIO.output(self.led_pin, GPIO.LOW)
+                GPIO.setup(self.buzzer_pin, GPIO.OUT)
+                GPIO.output(self.buzzer_pin, GPIO.LOW)
+                self.gpio_initialized = True
+                print(f"✓ GPIO初始化成功 | LED: {led_pin} | 蜂鸣器: {buzzer_pin}")
+            except ImportError:
+                print("⚠️ RPi.GPIO未安装，GPIO功能禁用")
+            except Exception as e:
+                print(f"⚠️ GPIO初始化失败: {e}")
+    
+    def turn_on_led(self):
+        if self.gpio_initialized and not self.led_state:
+            self.GPIO.output(self.led_pin, self.GPIO.HIGH)
+            self.led_state = True
+    
+    def turn_off_led(self):
+        if self.gpio_initialized and self.led_state:
+            self.GPIO.output(self.led_pin, self.GPIO.LOW)
+            self.led_state = False
+    
+    def buzzer_beep(self, duration: float = 0.5):
+        if self.gpio_initialized:
+            self.GPIO.output(self.buzzer_pin, self.GPIO.HIGH)
+            time.sleep(duration)
+            self.GPIO.output(self.buzzer_pin, self.GPIO.LOW)
+    
+    def cleanup(self):
+        if self.gpio_initialized:
+            self.GPIO.cleanup()
+            print("✓ GPIO资源已清理")
+
+
+# ==================== 统一检测系统 ====================
+class UnifiedDetectionSystem:
+    """
+    统一检测系统 - 整合危险区域检测和产品检测
+    
+    特点：
+    1. 共享同一个摄像头
+    2. 支持模式切换（键盘/后端API）
+    3. 默认运行危险区域检测
+    4. 按需切换到产品检测
+    """
+    
+    def __init__(self, camera_id: int = 0):
+        self.camera_id = camera_id
+        self.cap = None
+        
+        # 当前模式
+        self.current_mode = DetectionMode.ZONE
+        self.mode_lock = threading.Lock()
+        
+        # 检测器
+        self.zone_detector = None
+        self.product_detector = None
+        
+        # 服务器客户端
+        self.server = None
+        if ENABLE_SERVER_REPORT or ENABLE_VIDEO_STREAM:
+            self.server = ServerClient(SERVER_URL, DEVICE_ID)
+        
+        # GPIO控制器
+        self.gpio = GPIOController()
+        
+        # 视频流控制
+        self.last_stream_time = 0
+        self.stream_interval = 1.0 / VIDEO_STREAM_FPS
+        
+        # 运行状态
+        self.running = False
+        
+        # 模式检查间隔
+        self.last_mode_check = 0
+        self.mode_check_interval = 1.0  # 每秒检查一次
+    
+    def init_detectors(self):
+        """初始化检测器"""
+        print("\n" + "="*60)
+        print("🚀 统一检测系统初始化中...")
+        print("="*60)
+        
+        # 初始化危险区域检测器
+        self.zone_detector = ZoneDetector(
+            model_path="yolov8n.pt",
+            frame_skip=3,
+            input_size=(320, 320),
+            alert_cooldown=3.0
+        )
+        
+        # 配置危险区域（屏幕右半部分）
+        self.zone_detector.add_danger_zone([
+            (CAMERA_WIDTH // 2, 0),
+            (CAMERA_WIDTH, 0),
+            (CAMERA_WIDTH, CAMERA_HEIGHT),
+            (CAMERA_WIDTH // 2, CAMERA_HEIGHT)
+        ])
+        
+        # 配置安全区域（屏幕左半部分）
+        self.zone_detector.add_safe_zone([
+            (0, 0),
+            (CAMERA_WIDTH // 2, 0),
+            (CAMERA_WIDTH // 2, CAMERA_HEIGHT),
+            (0, CAMERA_HEIGHT)
+        ])
+        
+        # 设置报警回调
+        self.zone_detector.set_alert_callback(self._on_zone_alert)
+        
+        # 初始化产品检测器
+        self.product_detector = ProductDetector()
+        
+        print("✓ 所有检测器初始化完成")
+    
+    def _on_zone_alert(self, alert: AlertInfo):
+        """危险区域报警回调"""
+        print(f"\n🚨 {alert.timestamp} - {alert.message}")
+        
+        # 播放报警声
+        def _alarm():
+            if IS_WINDOWS:
+                winsound.Beep(1000, 500)
+            elif IS_LINUX:
+                self.gpio.buzzer_beep(0.5)
+        threading.Thread(target=_alarm, daemon=True).start()
+        
+        # LED报警
+        def _led():
+            self.gpio.turn_on_led()
+            time.sleep(3.0)
+            self.gpio.turn_off_led()
+        threading.Thread(target=_led, daemon=True).start()
+    
+    def set_mode(self, mode: DetectionMode):
+        """设置检测模式"""
+        with self.mode_lock:
+            if self.current_mode != mode:
+                self.current_mode = mode
+                mode_name = "危险区域检测" if mode == DetectionMode.ZONE else "产品检测"
+                print(f"\n🔄 切换到: {mode_name}")
+    
+    def get_mode(self) -> DetectionMode:
+        """获取当前模式"""
+        with self.mode_lock:
+            return self.current_mode
+    
+    def _check_mode_from_server(self):
+        """从服务器检查模式"""
+        current_time = time.time()
+        if current_time - self.last_mode_check >= self.mode_check_interval:
+            self.last_mode_check = current_time
+            if self.server:
+                new_mode = self.server.get_detection_mode()
+                self.set_mode(new_mode)
+    
+    def _stream_frame(self, frame: np.ndarray, detection_info: dict):
+        """推送视频帧"""
+        current_time = time.time()
+        if current_time - self.last_stream_time >= self.stream_interval:
+            self.last_stream_time = current_time
+            if self.server:
+                def _send():
+                    self.server.send_video_frame(frame, detection_info)
+                threading.Thread(target=_send, daemon=True).start()
+    
+    def _report_detection(self, detection_info: dict):
+        """上报检测结果"""
+        if not self.server:
+            return
+        
+        mode = detection_info.get("mode", "zone")
+        
+        if mode == "zone" and detection_info.get("alert_triggered"):
+            def _report():
+                self.server.report_detection(
+                    detection_info.get("person_count", 0),
+                    detection_info.get("in_danger_zone", False),
+                    detection_info.get("alert_triggered", False)
+                )
+            threading.Thread(target=_report, daemon=True).start()
+        
+        elif mode == "product" and detection_info.get("detected"):
+            def _report():
+                self.server.report_product(detection_info)
+            threading.Thread(target=_report, daemon=True).start()
+    
+    def run(self, headless: bool = False):
+        """运行检测系统"""
+        # 初始化检测器
+        self.init_detectors()
+        
+        # 打开摄像头
+        self.cap = cv2.VideoCapture(self.camera_id)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
+        self.cap.set(cv2.CAP_PROP_FPS, 30)
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        
+        if not self.cap.isOpened():
+            print("错误：无法打开摄像头")
+            return
+        
+        print("\n" + "="*60)
+        print("🎬 统一检测系统已启动")
+        print(f"📹 摄像头: {self.camera_id} | 分辨率: {CAMERA_WIDTH}x{CAMERA_HEIGHT}")
+        print("-"*60)
+        print("操作说明:")
+        print("  '1' - 切换到危险区域检测模式")
+        print("  '2' - 切换到产品检测模式")
+        print("  'c' - 手动捕获产品（产品模式下）")
+        print("  'r' - 重置产品计数")
+        print("  'q' - 退出程序")
+        print("="*60 + "\n")
+        
+        self.running = True
+        window_name = "Unified Detection System"
+        
+        if not headless:
+            cv2.namedWindow(window_name)
+        
+        fps_start_time = time.time()
+        fps_frame_count = 0
+        fps = 0
+        
+        try:
+            while self.running:
+                ret, frame = self.cap.read()
+                if not ret:
+                    print("错误：无法读取帧")
+                    break
+                
+                # 检查服务器模式
+                self._check_mode_from_server()
+                
+                # 根据模式执行检测
+                current_mode = self.get_mode()
+                
+                if current_mode == DetectionMode.ZONE:
+                    processed_frame, detection_info = self.zone_detector.detect(frame)
+                else:
+                    processed_frame, detection_info = self.product_detector.detect(frame)
+                
+                # 上报检测结果
+                self._report_detection(detection_info)
+                
+                # 推送视频流
+                if ENABLE_VIDEO_STREAM:
+                    self._stream_frame(processed_frame, detection_info)
+                
+                # 计算FPS
+                fps_frame_count += 1
+                if fps_frame_count >= 10:
+                    fps = fps_frame_count / (time.time() - fps_start_time)
+                    fps_start_time = time.time()
+                    fps_frame_count = 0
+                
+                cv2.putText(processed_frame, f"FPS: {fps:.1f}", (10, CAMERA_HEIGHT - 10),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                
+                # 显示操作提示
+                cv2.putText(processed_frame, "1:Zone 2:Product c:Capture r:Reset q:Quit",
+                           (10, CAMERA_HEIGHT - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+                
+                if not headless:
+                    cv2.imshow(window_name, processed_frame)
+                    key = cv2.waitKey(1) & 0xFF
+                    
+                    if key == ord('q'):
+                        print("\n正在退出...")
+                        break
+                    elif key == ord('1'):
+                        self.set_mode(DetectionMode.ZONE)
+                    elif key == ord('2'):
+                        self.set_mode(DetectionMode.PRODUCT)
+                    elif key == ord('c') and current_mode == DetectionMode.PRODUCT:
+                        result = self.product_detector.capture(frame)
+                        if result and self.server:
+                            self.server.report_product(result)
+                    elif key == ord('r'):
+                        self.product_detector.reset_count()
+                else:
+                    time.sleep(0.01)
+                    
+        except KeyboardInterrupt:
+            print("\n\n收到中断信号，正在退出...")
+        finally:
+            self.running = False
+            if self.cap:
+                self.cap.release()
+            if not headless:
+                cv2.destroyAllWindows()
+            self.gpio.cleanup()
+            print("✓ 程序已安全退出")
+            print(f"\n产品检测统计:")
+            print(f"  产品A: {self.product_detector.detection_count['product_a']}")
+            print(f"  产品B: {self.product_detector.detection_count['product_b']}")
+
+
+# ==================== 主程序入口 ====================
+if __name__ == "__main__":
+    system = UnifiedDetectionSystem(camera_id=0)
+    system.run(headless=False)
