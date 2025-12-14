@@ -21,6 +21,7 @@ from .schemas import (
 from .websocket_manager import manager
 from .config import settings
 from .conveyor import get_conveyor_manager, conveyor_managers
+from .scheduler import get_scheduler, scheduler_manager
 
 # 创建FastAPI应用
 app = FastAPI(
@@ -95,6 +96,9 @@ async def conveyor_simulation_task():
                         await manager.broadcast_status_change(
                             device_id, status.status, status.mode, status.production_count
                         )
+                        # 检查产量调度规则
+                        scheduler = get_scheduler()
+                        await scheduler.check_production(device_id, status.production_count)
                 except Exception as e:
                     print(f"同步生产计数失败: {e}")
                 finally:
@@ -136,7 +140,13 @@ async def startup():
     # 启动传送带模拟任务
     asyncio.create_task(conveyor_simulation_task())
     
+    # 初始化调度管理器
+    scheduler = get_scheduler()
+    scheduler.init_device(default_device)
+    scheduler.set_action_callback(execute_schedule_action)
+    
     print("🚀 智能生产线监控系统已启动")
+    print("📋 自动调度规则已启用")
     print(f"🧹 数据保留 {DATA_RETENTION_DAYS} 天，每 {AUTO_CLEANUP_INTERVAL//3600} 小时自动清理")
     print(f"🔄 传送带模拟已启动，更新频率: {1/CONVEYOR_UPDATE_INTERVAL:.0f} FPS")
 
@@ -197,9 +207,75 @@ async def handle_control_command(data: dict):
     return success
 
 
+async def execute_schedule_action(device_id: str, action: dict):
+    """执行调度动作"""
+    cmd = action.get("action")
+    params = action.get("params", {})
+    reason = action.get("reason", "自动调度")
+    
+    if cmd == "none":
+        return
+    
+    db = SessionLocal()
+    try:
+        status = db.query(ProductionStatus).filter(
+            ProductionStatus.device_id == device_id
+        ).first()
+        
+        if not status:
+            return
+        
+        message = ""
+        if cmd == "start":
+            if status.status != "running":
+                status.status = "running"
+                message = f"自动启动: {reason}"
+        elif cmd == "stop":
+            if status.status != "stopped":
+                status.status = "stopped"
+                message = f"自动停止: {reason}"
+        elif cmd == "pause":
+            if status.status == "running":
+                status.status = "paused"
+                message = f"自动暂停: {reason}"
+        elif cmd == "switch_mode":
+            new_mode = params.get("mode", "product_a")
+            status.mode = new_mode
+            message = f"自动切换模式: {new_mode}"
+        
+        if message:
+            db.commit()
+            
+            # 同步传送带状态
+            conveyor = get_conveyor_manager(device_id)
+            conveyor.sync_with_production(status.status, status.mode)
+            
+            # 广播状态变化
+            await manager.broadcast_status_change(
+                device_id, status.status, status.mode, status.production_count
+            )
+            
+            # 广播调度事件
+            await manager.broadcast_to_dashboard({
+                "type": "schedule_action",
+                "data": {
+                    "device_id": device_id,
+                    "action": cmd,
+                    "reason": reason,
+                    "message": message
+                },
+                "timestamp": datetime.now().isoformat()
+            })
+            
+            print(f"⚡ 调度执行: {message}")
+    except Exception as e:
+        print(f"调度执行失败: {e}")
+    finally:
+        db.close()
+
+
 async def process_sensor_data(device_id: str, data: dict):
     """处理传感器数据并广播"""
-    # 这里可以添加数据库存储逻辑
     sensor_type = data.get("sensor_type")
     value = data.get("value")
     unit = data.get("unit", "")
@@ -215,6 +291,10 @@ async def process_sensor_data(device_id: str, data: dict):
         elif value >= settings.TEMP_WARNING_THRESHOLD:
             await manager.broadcast_alert(device_id, "temperature", 
                 f"温度警告: {value}°C", "warning")
+        
+        # 检查温度调度规则
+        scheduler = get_scheduler()
+        await scheduler.check_temperature(device_id, value)
 
 
 async def process_detection_data(device_id: str, data: dict):
@@ -729,6 +809,127 @@ async def control_conveyor(device_id: str, data: dict):
     await manager.broadcast_conveyor_update(device_id, conveyor.get_state())
     
     return result
+
+
+# ---------- 调度管理API ----------
+@app.get("/api/scheduler/{device_id}", tags=["调度管理"])
+async def get_scheduler_state(device_id: str):
+    """获取调度器状态"""
+    scheduler = get_scheduler()
+    return scheduler.get_state(device_id)
+
+
+@app.get("/api/scheduler/{device_id}/rules", tags=["调度管理"])
+async def get_schedule_rules(device_id: str):
+    """获取调度规则列表"""
+    scheduler = get_scheduler()
+    return scheduler.get_rules(device_id)
+
+
+@app.put("/api/scheduler/{device_id}/rules/{rule_id}", tags=["调度管理"])
+async def update_schedule_rule(device_id: str, rule_id: str, data: dict):
+    """
+    更新调度规则
+    
+    Body:
+        enabled: bool - 是否启用
+        threshold: float - 阈值
+        cooldown: float - 冷却时间
+    """
+    scheduler = get_scheduler()
+    success = scheduler.update_rule(device_id, rule_id, **data)
+    
+    if not success:
+        raise HTTPException(status_code=404, detail=f"规则不存在: {rule_id}")
+    
+    return {"success": True, "rule_id": rule_id}
+
+
+@app.post("/api/scheduler/{device_id}/plan", tags=["调度管理"])
+async def set_production_plan(device_id: str, data: dict):
+    """
+    设置生产计划
+    
+    Body:
+        target_count: int - 目标产量（0表示无限制）
+        auto_stop: bool - 达到目标后是否自动停止
+        auto_switch_mode: str - 达到目标后切换到的模式（可选）
+    """
+    scheduler = get_scheduler()
+    
+    target_count = data.get("target_count", 0)
+    auto_stop = data.get("auto_stop", True)
+    auto_switch_mode = data.get("auto_switch_mode")
+    
+    plan = scheduler.set_production_plan(
+        device_id, target_count, auto_stop, auto_switch_mode
+    )
+    
+    return {
+        "success": True,
+        "plan": plan.to_dict()
+    }
+
+
+@app.delete("/api/scheduler/{device_id}/plan", tags=["调度管理"])
+async def clear_production_plan(device_id: str):
+    """清除生产计划"""
+    scheduler = get_scheduler()
+    scheduler.clear_production_plan(device_id)
+    return {"success": True}
+
+
+@app.get("/api/scheduler/{device_id}/progress", tags=["调度管理"])
+async def get_plan_progress(device_id: str, db: Session = Depends(get_db)):
+    """获取生产计划进度"""
+    scheduler = get_scheduler()
+    
+    # 获取当前产量
+    status = db.query(ProductionStatus).filter(
+        ProductionStatus.device_id == device_id
+    ).first()
+    
+    current_count = status.production_count if status else 0
+    
+    return scheduler.get_plan_progress(device_id, current_count)
+
+
+# ---------- 产品检测API ----------
+@app.post("/api/product/detection", tags=["产品检测"])
+async def report_product_detection(data: dict):
+    """
+    上报产品检测结果
+    
+    Body:
+        device_id: 设备ID
+        product_type: 产品类型 (product_a/product_b/unknown)
+        color: 颜色
+        shape: 形状
+        confidence: 置信度
+    """
+    device_id = data.get("device_id", "device_001")
+    product_type = data.get("product_type", "unknown")
+    color = data.get("color", "")
+    shape = data.get("shape", "")
+    confidence = data.get("confidence", 0)
+    
+    # 广播到前端
+    await manager.broadcast_to_dashboard({
+        "type": "product_detection",
+        "data": {
+            "device_id": device_id,
+            "product_type": product_type,
+            "color": color,
+            "shape": shape,
+            "confidence": confidence
+        },
+        "timestamp": datetime.now().isoformat()
+    })
+    
+    return {
+        "success": True,
+        "product_type": product_type
+    }
 
 
 # ---------- 健康检查 ----------

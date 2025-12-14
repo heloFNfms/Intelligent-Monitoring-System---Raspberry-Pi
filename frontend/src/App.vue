@@ -75,6 +75,67 @@
           </div>
         </div>
 
+        <!-- 生产计划 -->
+        <div class="card plan-card">
+          <h3>
+            生产计划
+            <el-tag v-if="planProgress.has_plan" size="small" type="success">进行中</el-tag>
+          </h3>
+          <div class="plan-content">
+            <div class="plan-input">
+              <span>目标产量:</span>
+              <el-input-number v-model="targetCount" :min="0" :max="9999" size="small" />
+              <el-button type="primary" size="small" @click="setPlan" :disabled="targetCount <= 0">
+                设置
+              </el-button>
+              <el-button size="small" @click="clearPlan" v-if="planProgress.has_plan">
+                清除
+              </el-button>
+            </div>
+            <div v-if="planProgress.has_plan" class="plan-progress">
+              <div class="progress-info">
+                <span>进度: {{ planProgress.current }} / {{ planProgress.target }}</span>
+                <span>{{ planProgress.progress }}%</span>
+              </div>
+              <el-progress :percentage="planProgress.progress" :stroke-width="8" 
+                          :color="planProgress.progress >= 100 ? '#4a9d6e' : '#3a91c7'" />
+              <div class="progress-detail">
+                <span>剩余: {{ planProgress.remaining }} 件</span>
+                <span v-if="planProgress.estimated_time">预计完成: {{ planProgress.estimated_time }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 自动调度 -->
+        <div class="card schedule-card">
+          <h3>
+            自动调度
+            <el-switch v-model="autoScheduleEnabled" size="small" @change="toggleAutoSchedule" />
+          </h3>
+          <div class="schedule-rules">
+            <div class="rule-item" :class="{ disabled: !scheduleRules.tempPause }">
+              <el-checkbox v-model="scheduleRules.tempPause" @change="updateScheduleRule('temp_danger_pause', $event)">
+                高温自动暂停 (>95°C)
+              </el-checkbox>
+            </div>
+            <div class="rule-item" :class="{ disabled: !scheduleRules.tempRecover }">
+              <el-checkbox v-model="scheduleRules.tempRecover" @change="updateScheduleRule('temp_recover_start', $event)">
+                温度恢复自动启动 (<80°C)
+              </el-checkbox>
+            </div>
+            <div class="rule-item" :class="{ disabled: !scheduleRules.productionStop }">
+              <el-checkbox v-model="scheduleRules.productionStop" @change="updateScheduleRule('production_complete', $event)">
+                产量达标自动停止
+              </el-checkbox>
+            </div>
+          </div>
+          <div v-if="lastScheduleAction" class="schedule-log">
+            <span class="log-icon">⚡</span>
+            <span class="log-text">{{ lastScheduleAction }}</span>
+          </div>
+        </div>
+
         <!-- 报警列表 -->
         <div class="card alert-card">
           <h3>
@@ -238,6 +299,26 @@ const productionMode = ref('product_a')
 const productionCount = ref(0)
 const selectedMode = ref('product_a')
 const conveyorSpeed = ref(1.0)
+
+// 生产计划
+const targetCount = ref(100)
+const planProgress = ref({
+  has_plan: false,
+  target: 0,
+  current: 0,
+  progress: 0,
+  remaining: 0,
+  estimated_time: null
+})
+
+// 自动调度
+const autoScheduleEnabled = ref(true)
+const scheduleRules = ref({
+  tempPause: true,
+  tempRecover: true,
+  productionStop: true
+})
+const lastScheduleAction = ref('')
 
 // 传感器数据
 const currentTemp = ref(null)
@@ -502,6 +583,94 @@ const resolveAlertItem = async (alertId) => {
   }
 }
 
+// 设置生产计划
+const setPlan = async () => {
+  try {
+    const response = await fetch(`/api/scheduler/${deviceId.value}/plan`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        target_count: targetCount.value,
+        auto_stop: scheduleRules.value.productionStop
+      })
+    })
+    if (response.ok) {
+      ElMessage.success(`生产计划已设置: 目标 ${targetCount.value} 件`)
+      await loadPlanProgress()
+    }
+  } catch (e) {
+    ElMessage.error('设置计划失败')
+  }
+}
+
+// 清除生产计划
+const clearPlan = async () => {
+  try {
+    const response = await fetch(`/api/scheduler/${deviceId.value}/plan`, {
+      method: 'DELETE'
+    })
+    if (response.ok) {
+      ElMessage.success('生产计划已清除')
+      planProgress.value = { has_plan: false, target: 0, current: 0, progress: 0, remaining: 0, estimated_time: null }
+    }
+  } catch (e) {
+    ElMessage.error('清除计划失败')
+  }
+}
+
+// 加载生产计划进度
+const loadPlanProgress = async () => {
+  try {
+    const response = await fetch(`/api/scheduler/${deviceId.value}/progress`)
+    if (response.ok) {
+      planProgress.value = await response.json()
+    }
+  } catch (e) {
+    console.error('加载计划进度失败:', e)
+  }
+}
+
+// 切换自动调度
+const toggleAutoSchedule = async (enabled) => {
+  // 批量更新所有规则
+  for (const ruleId of ['temp_danger_pause', 'temp_recover_start', 'production_complete']) {
+    await updateScheduleRule(ruleId, enabled)
+  }
+  scheduleRules.value.tempPause = enabled
+  scheduleRules.value.tempRecover = enabled
+  scheduleRules.value.productionStop = enabled
+}
+
+// 更新调度规则
+const updateScheduleRule = async (ruleId, enabled) => {
+  try {
+    await fetch(`/api/scheduler/${deviceId.value}/rules/${ruleId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled })
+    })
+  } catch (e) {
+    console.error('更新规则失败:', e)
+  }
+}
+
+// 加载调度规则
+const loadScheduleRules = async () => {
+  try {
+    const response = await fetch(`/api/scheduler/${deviceId.value}/rules`)
+    if (response.ok) {
+      const rules = await response.json()
+      for (const rule of rules) {
+        if (rule.id === 'temp_danger_pause') scheduleRules.value.tempPause = rule.enabled
+        if (rule.id === 'temp_recover_start') scheduleRules.value.tempRecover = rule.enabled
+        if (rule.id === 'production_complete') scheduleRules.value.productionStop = rule.enabled
+      }
+    }
+  } catch (e) {
+    console.error('加载规则失败:', e)
+  }
+}
+
 // 触发报警器
 const triggerAlarm = () => {
   alarmActive.value = true
@@ -641,6 +810,19 @@ const setupWebSocket = async () => {
       ledStatus.value.running = data.status === 'running'
       ledStatus.value.productA = data.mode === 'product_a' && data.status === 'running'
       ledStatus.value.productB = data.mode === 'product_b' && data.status === 'running'
+      
+      // 更新生产计划进度
+      loadPlanProgress()
+    })
+    
+    // 调度动作事件
+    wsClient.on('schedule_action', (data) => {
+      lastScheduleAction.value = `${data.message} (${new Date().toLocaleTimeString()})`
+      ElMessage({
+        message: `⚡ 自动调度: ${data.message}`,
+        type: 'info',
+        duration: 5000
+      })
     })
     
     // LED状态更新（来自开发板）
@@ -701,6 +883,8 @@ onMounted(async () => {
   initCharts()
   await loadDashboard()
   await loadAlerts()
+  await loadScheduleRules()
+  await loadPlanProgress()
   await setupWebSocket()
   
   // 窗口大小变化时重绘图表
@@ -1556,5 +1740,133 @@ onUnmounted(() => {
   --el-message-bg-color: var(--glass-bg);
   backdrop-filter: blur(var(--glass-blur));
   border: 1px solid var(--border-color);
+}
+
+/* ========================================
+   生产计划卡片
+   ======================================== */
+.plan-card .plan-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.plan-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.plan-input span {
+  color: var(--text-secondary);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.plan-input .el-input-number {
+  width: 100px;
+}
+
+.plan-progress {
+  padding: 12px;
+  background: rgba(58, 145, 199, 0.08);
+  border-radius: 6px;
+  border: 1px solid rgba(58, 145, 199, 0.15);
+}
+
+.progress-info {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.progress-info span:last-child {
+  color: var(--primary-color);
+  font-weight: 600;
+  font-family: var(--font-mono);
+}
+
+.progress-detail {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* ========================================
+   自动调度卡片
+   ======================================== */
+.schedule-card .schedule-rules {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rule-item {
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  transition: all 0.2s ease;
+}
+
+.rule-item:hover {
+  border-color: var(--border-glow);
+}
+
+.rule-item.disabled {
+  opacity: 0.5;
+}
+
+.rule-item .el-checkbox {
+  --el-checkbox-text-color: var(--text-secondary);
+  --el-checkbox-input-border-color: var(--border-color);
+}
+
+.rule-item .el-checkbox.is-checked .el-checkbox__inner {
+  background: var(--primary-color);
+  border-color: var(--primary-color);
+}
+
+.schedule-log {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: rgba(74, 157, 110, 0.1);
+  border-radius: 4px;
+  border-left: 3px solid var(--success-color);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.schedule-log .log-icon {
+  font-size: 14px;
+}
+
+.schedule-log .log-text {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* Element Plus 输入框样式 */
+.el-input-number {
+  --el-input-bg-color: rgba(255, 255, 255, 0.05);
+  --el-input-border-color: var(--border-color);
+  --el-input-text-color: var(--text-primary);
+}
+
+.el-input-number .el-input__inner {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--border-color);
+  color: var(--text-primary);
+}
+
+/* Switch 样式 */
+.el-switch {
+  --el-switch-on-color: var(--primary-color);
 }
 </style>

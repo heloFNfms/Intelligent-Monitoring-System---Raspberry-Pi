@@ -34,6 +34,7 @@
 
 ### 1. 生产线模块（树莓派端 / 模拟器）
 - ✅ 目标检测：YOLOv8检测人员进入危险区域
+- ✅ 产品检测：基于颜色和形状识别产品类型（产品A/产品B）
 - ✅ 传感器数据采集：温度、压力、湿度
 - ✅ 传送带模拟：物品生成、移动、完成计数
 - ✅ 报警控制：LED灯、蜂鸣器
@@ -42,6 +43,8 @@
 - ✅ 数据聚合：接收并存储设备数据
 - ✅ 控制指令：下发启动/停止/切换模式指令
 - ✅ 传送带管理：状态同步、物品追踪
+- ✅ 自动调度：温度过高自动暂停、恢复后自动启动
+- ✅ 生产计划：设置目标产量、达标自动停止
 - ✅ API服务：提供REST API和WebSocket
 
 ### 3. 可视化与管理界面（前端）
@@ -49,6 +52,8 @@
 - ✅ 传送带可视化：动态显示物品移动
 - ✅ 报警管理：报警列表、处理报警
 - ✅ 远程控制：启动/停止/切换模式
+- ✅ 生产计划管理：设置目标、查看进度
+- ✅ 自动调度配置：启用/禁用调度规则
 
 ## 快速开始
 
@@ -106,6 +111,7 @@ python main.py
 │   │   ├── schemas.py      # 请求/响应数据模型
 │   │   ├── config.py       # 配置文件
 │   │   ├── conveyor.py     # 传送带管理器
+│   │   ├── scheduler.py    # 自动调度管理器
 │   │   └── websocket_manager.py  # WebSocket连接管理
 │   ├── run.py              # 启动脚本
 │   ├── init_db.sql         # 数据库初始化SQL
@@ -129,7 +135,8 @@ python main.py
 │   └── config.py          # 模拟器配置
 │
 ├── project/                # 树莓派端代码（部署用）
-│   ├── zone_detection.py  # YOLOv8区域检测
+│   ├── zone_detection.py  # YOLOv8区域检测（人员安全）
+│   ├── product_detection.py  # 产品检测（颜色/形状识别）
 │   └── device_client.py   # 设备通信客户端
 │
 └── docs/                   # 文档
@@ -159,6 +166,21 @@ python main.py
 |------|------|------|
 | POST | `/api/control` | 发送控制指令（启动/停止/暂停/切换模式） |
 
+### 调度管理
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/scheduler/{device_id}` | 获取调度器状态 |
+| GET | `/api/scheduler/{device_id}/rules` | 获取调度规则列表 |
+| PUT | `/api/scheduler/{device_id}/rules/{rule_id}` | 更新调度规则 |
+| POST | `/api/scheduler/{device_id}/plan` | 设置生产计划 |
+| DELETE | `/api/scheduler/{device_id}/plan` | 清除生产计划 |
+| GET | `/api/scheduler/{device_id}/progress` | 获取生产计划进度 |
+
+### 产品检测
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/product/detection` | 上报产品检测结果 |
+
 ### WebSocket 消息类型
 | 类型 | 说明 |
 |------|------|
@@ -167,6 +189,8 @@ python main.py
 | `conveyor_update` | 传送带状态更新 |
 | `alert` | 报警信息 |
 | `video_frame` | 视频帧 |
+| `schedule_action` | 自动调度动作 |
+| `product_detection` | 产品检测结果 |
 
 ## 配置说明
 
@@ -189,9 +213,39 @@ TEMP_DANGER_THRESHOLD = 95.0   # 温度危险阈值
 ## 树莓派部署
 
 1. 将 `project/` 目录复制到树莓派
-2. 安装依赖：`pip install ultralytics opencv-python aiohttp`
+2. 安装依赖：`pip install ultralytics opencv-python aiohttp requests numpy`
 3. 修改 `device_client.py` 中的服务器地址
-4. 运行 `python zone_detection.py`
+4. 运行检测程序：
+   - 人员安全检测：`python zone_detection.py`
+   - 产品检测：`python product_detection.py`
+
+### 产品检测说明
+产品检测功能用于识别传送带上物品的颜色和形状：
+- **产品A**: 蓝色 + 方形
+- **产品B**: 青色 + 圆形
+
+操作方式：
+- 按 `c` 键手动捕获检测
+- 按 `r` 键重置计数
+- 按 `q` 键退出程序
+
+## 自动调度功能
+
+系统支持以下自动调度规则：
+
+1. **高温自动暂停**: 当温度超过95°C时，自动暂停生产线
+2. **温度恢复自动启动**: 当温度恢复到80°C以下时，自动恢复生产
+3. **产量达标自动停止**: 当产量达到设定目标时，自动停止生产线
+
+可在前端界面的"自动调度"面板中启用/禁用这些规则。
+
+## 生产计划功能
+
+在前端界面的"生产计划"面板中：
+1. 设置目标产量
+2. 点击"设置"按钮启动计划
+3. 实时查看进度和预计完成时间
+4. 达到目标后自动停止（如果启用了相应规则）
 
 ## 提交内容
 
