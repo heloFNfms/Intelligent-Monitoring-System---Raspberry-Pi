@@ -136,25 +136,60 @@
           </div>
         </div>
 
-        <!-- 报警列表 -->
-        <div class="card alert-card">
+        <!-- 环境阈值配置 -->
+        <div class="card threshold-card">
           <h3>
-            报警信息 
-            <el-badge :value="activeAlerts" :hidden="activeAlerts === 0" type="danger" />
+            环境阈值配置
+            <el-button size="small" type="primary" @click="saveThresholds" :loading="savingThresholds">
+              保存
+            </el-button>
           </h3>
-          <div class="alert-list">
-            <div v-for="alert in alerts" :key="alert.id" 
-                 class="alert-item" :class="alert.level">
-              <span class="alert-time">{{ formatTime(alert.timestamp) }}</span>
-              <span class="alert-message">{{ alert.message }}</span>
-              <el-button v-if="!alert.resolved" size="small" @click="resolveAlertItem(alert.id)">
-                处理
-              </el-button>
+          <div class="threshold-settings">
+            <div class="threshold-item">
+              <span class="threshold-label">🌡️ 温度范围 (°C)</span>
+              <div class="threshold-inputs">
+                <el-input-number v-model="thresholds.tempMin" :min="-20" :max="50" size="small" />
+                <span class="threshold-separator">~</span>
+                <el-input-number v-model="thresholds.tempMax" :min="20" :max="100" size="small" />
+              </div>
             </div>
-            <div v-if="alerts.length === 0" class="no-alerts">
-              暂无报警
+            <div class="threshold-item">
+              <span class="threshold-label">💧 湿度范围 (%)</span>
+              <div class="threshold-inputs">
+                <el-input-number v-model="thresholds.humidityMin" :min="0" :max="50" size="small" />
+                <span class="threshold-separator">~</span>
+                <el-input-number v-model="thresholds.humidityMax" :min="50" :max="100" size="small" />
+              </div>
+            </div>
+            <div class="threshold-item">
+              <span class="threshold-label">📊 压力范围 (kPa)</span>
+              <div class="threshold-inputs">
+                <el-input-number v-model="thresholds.pressureMin" :min="80" :max="100" size="small" />
+                <span class="threshold-separator">~</span>
+                <el-input-number v-model="thresholds.pressureMax" :min="100" :max="120" size="small" />
+              </div>
             </div>
           </div>
+        </div>
+
+        <!-- 历史数据查询 -->
+        <div class="card history-card">
+          <h3>
+            历史数据
+            <el-select v-model="historyType" size="small" style="width: 100px; margin-left: 10px;">
+              <el-option label="温度" value="temperature" />
+              <el-option label="湿度" value="humidity" />
+              <el-option label="压力" value="pressure" />
+            </el-select>
+          </h3>
+          <div class="history-range">
+            <el-radio-group v-model="historyRange" size="small" @change="loadHistoryData">
+              <el-radio-button label="1h">1小时</el-radio-button>
+              <el-radio-button label="6h">6小时</el-radio-button>
+              <el-radio-button label="24h">24小时</el-radio-button>
+            </el-radio-group>
+          </div>
+          <div ref="historyChartRef" class="history-chart-container"></div>
         </div>
       </section>
 
@@ -171,36 +206,24 @@
           <ConveyorBelt ref="conveyorRef" />
         </div>
 
-        <!-- 温度/湿度曲线（可切换） -->
+        <!-- 环境监测曲线（温度/湿度/压力可切换） -->
         <div class="card chart-card">
           <h3>
-            {{ chartType === 'temperature' ? '温度实时曲线' : '湿度实时曲线' }}
+            {{ chartTypeLabels[chartType] }}
             <div class="chart-switch">
               <el-button-group size="small">
                 <el-button :type="chartType === 'temperature' ? 'primary' : 'default'" 
                            @click="switchChartType('temperature')">🌡️ 温度</el-button>
                 <el-button :type="chartType === 'humidity' ? 'primary' : 'default'" 
                            @click="switchChartType('humidity')">💧 湿度</el-button>
+                <el-button :type="chartType === 'pressure' ? 'primary' : 'default'" 
+                           @click="switchChartType('pressure')">📊 压力</el-button>
               </el-button-group>
             </div>
           </h3>
-          <div ref="tempChartRef" class="chart-container"></div>
-          <div v-if="chartType === 'temperature'" class="current-value" 
-               :class="{ warning: currentTemp >= 80, danger: currentTemp >= 95 }">
-            当前温度: <strong>{{ currentTemp?.toFixed(1) || '--' }}°C</strong>
-          </div>
-          <div v-else class="current-value" 
-               :class="{ warning: currentHumidity >= 70, danger: currentHumidity >= 85 }">
-            当前湿度: <strong>{{ currentHumidity?.toFixed(1) || '--' }}%</strong>
-          </div>
-        </div>
-
-        <!-- 压力曲线 -->
-        <div class="card chart-card">
-          <h3>压力实时曲线</h3>
-          <div ref="pressureChartRef" class="chart-container"></div>
-          <div class="current-value">
-            当前压力: <strong>{{ currentPressure?.toFixed(1) || '--' }} kPa</strong>
+          <div ref="mainChartRef" class="chart-container"></div>
+          <div class="current-value" :class="currentValueClass">
+            {{ currentValueLabel }}: <strong>{{ currentValueDisplay }}</strong>
           </div>
         </div>
       </section>
@@ -291,6 +314,27 @@
             </div>
             <div v-else class="no-product">
               等待检测产品...
+            </div>
+          </div>
+        </div>
+
+        <!-- 报警列表 -->
+        <div class="card alert-card">
+          <h3>
+            报警信息 
+            <el-badge :value="activeAlerts" :hidden="activeAlerts === 0" type="danger" />
+          </h3>
+          <div class="alert-list">
+            <div v-for="alert in alerts" :key="alert.id" 
+                 class="alert-item" :class="alert.level">
+              <span class="alert-time">{{ formatTime(alert.timestamp) }}</span>
+              <span class="alert-message">{{ alert.message }}</span>
+              <el-button v-if="!alert.resolved" size="small" @click="resolveAlertItem(alert.id)">
+                处理
+              </el-button>
+            </div>
+            <div v-if="alerts.length === 0" class="no-alerts">
+              暂无报警
             </div>
           </div>
         </div>
@@ -450,10 +494,40 @@ let alarmSound = null
 let alarmTimeout = null
 
 // 图表实例
-const tempChartRef = ref(null)
-const pressureChartRef = ref(null)
-let tempChart = null
-let pressureChart = null
+const mainChartRef = ref(null)
+const historyChartRef = ref(null)
+let mainChart = null
+let historyChart = null
+
+// 图表类型标签
+const chartTypeLabels = {
+  temperature: '温度实时曲线',
+  humidity: '湿度实时曲线',
+  pressure: '压力实时曲线'
+}
+
+// 环境阈值配置
+const thresholds = ref({
+  tempMin: 10,
+  tempMax: 35,
+  humidityMin: 20,
+  humidityMax: 80,
+  pressureMin: 90,
+  pressureMax: 110
+})
+const savingThresholds = ref(false)
+
+// 历史数据查询
+const historyType = ref('temperature')
+const historyRange = ref('1h')
+const historyData = ref([])
+
+// 产品检测计数
+const productACount = ref(0)
+const productBCount = ref(0)
+
+// 声音报警
+let alarmAudio = null
 
 // 计算属性
 const statusText = computed(() => {
@@ -464,6 +538,32 @@ const statusText = computed(() => {
 const modeText = computed(() => {
   const map = { product_a: '产品A', product_b: '产品B' }
   return map[productionMode.value] || '未知'
+})
+
+// 当前值显示（根据图表类型）
+const currentValueLabel = computed(() => {
+  const labels = { temperature: '当前温度', humidity: '当前湿度', pressure: '当前压力' }
+  return labels[chartType.value]
+})
+
+const currentValueDisplay = computed(() => {
+  if (chartType.value === 'temperature') {
+    return currentTemp.value?.toFixed(1) ? `${currentTemp.value.toFixed(1)}°C` : '--°C'
+  } else if (chartType.value === 'humidity') {
+    return currentHumidity.value?.toFixed(1) ? `${currentHumidity.value.toFixed(1)}%` : '--%'
+  } else {
+    return currentPressure.value?.toFixed(1) ? `${currentPressure.value.toFixed(1)} kPa` : '-- kPa'
+  }
+})
+
+const currentValueClass = computed(() => {
+  if (chartType.value === 'temperature') {
+    return { warning: currentTemp.value >= 80, danger: currentTemp.value >= 95 }
+  } else if (chartType.value === 'humidity') {
+    return { warning: currentHumidity.value >= 70, danger: currentHumidity.value >= 85 }
+  } else {
+    return { warning: currentPressure.value >= 115, danger: currentPressure.value >= 120 }
+  }
 })
 
 // 时间格式化
@@ -487,45 +587,15 @@ const chartTheme = {
   axisTick: { lineStyle: { color: 'rgba(58, 145, 199, 0.3)' } }
 }
 
-// 初始化图表
-const initCharts = () => {
-  // 温度图表
-  tempChart = echarts.init(tempChartRef.value)
-  tempChart.setOption({
-    backgroundColor: 'transparent',
-    grid: { top: 20, right: 15, bottom: 30, left: 55 },
-    xAxis: { 
-      type: 'category', 
-      data: [],
-      axisLine: chartTheme.axisLine,
-      axisTick: chartTheme.axisTick,
-      axisLabel: { color: 'rgba(255, 255, 255, 0.5)', fontSize: 10 }
-    },
-    yAxis: { 
-      type: 'value', 
-      name: '°C', 
-      min: 0, 
-      max: 120,
-      nameTextStyle: { color: 'rgba(255, 255, 255, 0.5)', fontSize: 11 },
-      axisLine: chartTheme.axisLine,
-      splitLine: chartTheme.splitLine,
-      axisLabel: { color: 'rgba(255, 255, 255, 0.5)', fontSize: 10 }
-    },
-    series: [{
-      type: 'line',
-      smooth: true,
-      symbol: 'circle',
-      symbolSize: 4,
-      data: [],
-      areaStyle: { 
-        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-          { offset: 0, color: 'rgba(64, 158, 255, 0.35)' },
-          { offset: 1, color: 'rgba(64, 158, 255, 0.05)' }
-        ])
-      },
-      lineStyle: { color: '#409eff', width: 2 },
-      itemStyle: { color: '#409eff', borderColor: '#0d2b45', borderWidth: 2 }
-    }],
+// 图表配置
+const chartConfigs = {
+  temperature: {
+    name: '°C',
+    min: 0,
+    max: 120,
+    color: '#409eff',
+    gradientStart: 'rgba(64, 158, 255, 0.35)',
+    gradientEnd: 'rgba(64, 158, 255, 0.05)',
     visualMap: {
       show: false,
       pieces: [
@@ -533,15 +603,42 @@ const initCharts = () => {
         { gt: 80, lte: 95, color: '#d4915e' },
         { gt: 95, color: '#c75050' }
       ]
-    },
-    animation: true,
-    animationDuration: 180,
-    animationEasing: 'linear'
-  })
+    }
+  },
+  humidity: {
+    name: '%',
+    min: 0,
+    max: 100,
+    color: '#67c23a',
+    gradientStart: 'rgba(103, 194, 58, 0.35)',
+    gradientEnd: 'rgba(103, 194, 58, 0.05)',
+    visualMap: {
+      show: false,
+      pieces: [
+        { lte: 70, color: '#67c23a' },
+        { gt: 70, lte: 85, color: '#d4915e' },
+        { gt: 85, color: '#c75050' }
+      ]
+    }
+  },
+  pressure: {
+    name: 'kPa',
+    min: 80,
+    max: 150,
+    color: '#2db7b5',
+    gradientStart: 'rgba(45, 183, 181, 0.35)',
+    gradientEnd: 'rgba(45, 183, 181, 0.05)',
+    visualMap: null
+  }
+}
 
-  // 压力图表
-  pressureChart = echarts.init(pressureChartRef.value)
-  pressureChart.setOption({
+// 初始化图表
+const initCharts = () => {
+  // 主图表（温度/湿度/压力共用）
+  mainChart = echarts.init(mainChartRef.value)
+  const config = chartConfigs.temperature
+  
+  const option = {
     backgroundColor: 'transparent',
     grid: { top: 20, right: 15, bottom: 30, left: 55 },
     xAxis: { 
@@ -553,9 +650,9 @@ const initCharts = () => {
     },
     yAxis: { 
       type: 'value', 
-      name: 'kPa', 
-      min: 80, 
-      max: 150,
+      name: config.name, 
+      min: config.min, 
+      max: config.max,
       nameTextStyle: { color: 'rgba(255, 255, 255, 0.5)', fontSize: 11 },
       axisLine: chartTheme.axisLine,
       splitLine: chartTheme.splitLine,
@@ -569,17 +666,23 @@ const initCharts = () => {
       data: [],
       areaStyle: { 
         color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-          { offset: 0, color: 'rgba(45, 183, 181, 0.35)' },
-          { offset: 1, color: 'rgba(45, 183, 181, 0.05)' }
+          { offset: 0, color: config.gradientStart },
+          { offset: 1, color: config.gradientEnd }
         ])
       },
-      lineStyle: { color: '#2db7b5', width: 2 },
-      itemStyle: { color: '#2db7b5', borderColor: '#0d2b45', borderWidth: 2 }
+      lineStyle: { color: config.color, width: 2 },
+      itemStyle: { color: config.color, borderColor: '#0d2b45', borderWidth: 2 }
     }],
     animation: true,
     animationDuration: 180,
     animationEasing: 'linear'
-  })
+  }
+  
+  if (config.visualMap) {
+    option.visualMap = config.visualMap
+  }
+  
+  mainChart.setOption(option)
 }
 
 // 更新图表数据
@@ -601,71 +704,162 @@ const addDataPoint = (dataArray, newValue, maxPoints = 30) => {
   if (dataArray.length > maxPoints) dataArray.shift()
 }
 
-// 切换图表类型（温度/湿度）
+// 切换图表类型（温度/湿度/压力）
 const switchChartType = (type) => {
   chartType.value = type
   
-  // 重新配置图表
-  if (type === 'temperature') {
-    tempChart.setOption({
-      yAxis: { 
-        name: '°C', 
-        min: 0, 
-        max: 120 
+  const config = chartConfigs[type]
+  let dataArray = tempData.value
+  if (type === 'humidity') dataArray = humidityData.value
+  else if (type === 'pressure') dataArray = pressureData.value
+  
+  const option = {
+    yAxis: { 
+      name: config.name, 
+      min: config.min, 
+      max: config.max 
+    },
+    series: [{
+      data: dataArray.map(d => d.value),
+      areaStyle: { 
+        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+          { offset: 0, color: config.gradientStart },
+          { offset: 1, color: config.gradientEnd }
+        ])
       },
-      series: [{
-        data: tempData.value.map(d => d.value),
-        areaStyle: { 
-          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-            { offset: 0, color: 'rgba(64, 158, 255, 0.35)' },
-            { offset: 1, color: 'rgba(64, 158, 255, 0.05)' }
-          ])
-        },
-        lineStyle: { color: '#409eff' },
-        itemStyle: { color: '#409eff', borderColor: '#0d2b45', borderWidth: 2 }
-      }],
-      visualMap: {
-        show: false,
-        pieces: [
-          { lte: 80, color: '#3a91c7' },
-          { gt: 80, lte: 95, color: '#d4915e' },
-          { gt: 95, color: '#c75050' }
-        ]
-      },
-      xAxis: { data: tempData.value.map(d => d.time) }
+      lineStyle: { color: config.color },
+      itemStyle: { color: config.color, borderColor: '#0d2b45', borderWidth: 2 }
+    }],
+    xAxis: { data: dataArray.map(d => d.time) }
+  }
+  
+  if (config.visualMap) {
+    option.visualMap = config.visualMap
+  }
+  
+  mainChart.setOption(option)
+}
+
+// ========== 环境阈值配置 ==========
+const saveThresholds = async () => {
+  savingThresholds.value = true
+  try {
+    // 发送阈值到后端
+    const response = await fetch(`http://${window.location.hostname}:8000/api/thresholds/${deviceId.value}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(thresholds.value)
     })
-  } else {
-    // 湿度图表配置
-    tempChart.setOption({
-      yAxis: { 
-        name: '%', 
-        min: 0, 
-        max: 100 
+    if (response.ok) {
+      ElMessage.success('阈值配置已保存')
+    } else {
+      ElMessage.warning('阈值配置保存失败，本地生效')
+    }
+  } catch (e) {
+    ElMessage.warning('网络错误，阈值配置仅本地生效')
+  }
+  savingThresholds.value = false
+}
+
+// ========== 历史数据查询 ==========
+const initHistoryChart = () => {
+  if (!historyChartRef.value) return
+  historyChart = echarts.init(historyChartRef.value)
+  historyChart.setOption({
+    backgroundColor: 'transparent',
+    grid: { top: 20, right: 15, bottom: 30, left: 55 },
+    xAxis: { 
+      type: 'category', 
+      data: [],
+      axisLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.1)' } },
+      axisLabel: { color: 'rgba(255, 255, 255, 0.5)', fontSize: 10 }
+    },
+    yAxis: { 
+      type: 'value',
+      axisLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.1)' } },
+      splitLine: { lineStyle: { color: 'rgba(255, 255, 255, 0.05)' } },
+      axisLabel: { color: 'rgba(255, 255, 255, 0.5)', fontSize: 10 }
+    },
+    series: [{
+      type: 'line',
+      smooth: true,
+      data: [],
+      areaStyle: { 
+        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+          { offset: 0, color: 'rgba(64, 158, 255, 0.35)' },
+          { offset: 1, color: 'rgba(64, 158, 255, 0.05)' }
+        ])
       },
-      series: [{
-        data: humidityData.value.map(d => d.value),
-        areaStyle: { 
-          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-            { offset: 0, color: 'rgba(103, 194, 58, 0.35)' },
-            { offset: 1, color: 'rgba(103, 194, 58, 0.05)' }
-          ])
-        },
-        lineStyle: { color: '#67c23a' },
-        itemStyle: { color: '#67c23a', borderColor: '#0d2b45', borderWidth: 2 }
-      }],
-      visualMap: {
-        show: false,
-        pieces: [
-          { lte: 70, color: '#67c23a' },
-          { gt: 70, lte: 85, color: '#d4915e' },
-          { gt: 85, color: '#c75050' }
-        ]
-      },
-      xAxis: { data: humidityData.value.map(d => d.time) }
-    })
+      lineStyle: { color: '#409eff', width: 2 }
+    }]
+  })
+}
+
+const loadHistoryData = async () => {
+  // 根据选择的时间范围获取历史数据
+  const rangeMap = { '1h': 1, '6h': 6, '24h': 24 }
+  const hours = rangeMap[historyRange.value] || 1
+  
+  try {
+    // 从后端API获取历史数据
+    const response = await fetch(
+      `http://${window.location.hostname}:8000/api/sensor/history?device_id=${deviceId.value}&sensor_type=${historyType.value}&hours=${hours}`
+    )
+    
+    let sourceData = []
+    if (response.ok) {
+      const data = await response.json()
+      // 转换数据格式并按时间排序
+      sourceData = data.map(item => ({
+        time: new Date(item.timestamp).toLocaleTimeString('zh-CN'),
+        value: item.value
+      })).reverse()  // 按时间正序
+    }
+    
+    // 如果后端没有数据，使用本地缓存的实时数据
+    if (sourceData.length === 0) {
+      if (historyType.value === 'temperature') {
+        sourceData = tempData.value
+      } else if (historyType.value === 'humidity') {
+        sourceData = humidityData.value
+      } else {
+        sourceData = pressureData.value
+      }
+    }
+    
+    // 更新图表
+    if (historyChart) {
+      const colors = {
+        temperature: '#409eff',
+        humidity: '#67c23a',
+        pressure: '#2db7b5'
+      }
+      const color = colors[historyType.value]
+      const units = { temperature: '°C', humidity: '%', pressure: 'kPa' }
+      
+      historyChart.setOption({
+        yAxis: { name: units[historyType.value] },
+        xAxis: { data: sourceData.map(d => d.time) },
+        series: [{
+          data: sourceData.map(d => d.value),
+          lineStyle: { color },
+          itemStyle: { color },
+          areaStyle: { 
+            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+              { offset: 0, color: color + '59' },
+              { offset: 1, color: color + '0d' }
+            ])
+          }
+        }]
+      })
+    }
+  } catch (e) {
+    console.log('加载历史数据失败:', e)
   }
 }
 
+// ========== 声音报警 ==========
+// playAlarmSound 函数定义在下方 triggerAlarm 附近
 
 // 加载仪表盘数据
 const loadDashboard = async () => {
@@ -911,7 +1105,7 @@ const triggerAlarm = () => {
   alarmActive.value = true
   ledStatus.value.alert = true
   
-  // 播放报警声音
+  // 播放声音报警（循环播放直到关闭）
   playAlarmSound()
   
   // 10秒后自动关闭
@@ -988,23 +1182,26 @@ const setupWebSocket = async () => {
     wsClient.on('sensor_update', (data) => {
       if (data.sensor_type === 'temperature') {
         currentTemp.value = data.value
-        // 只有当前显示温度图表时才更新
+        // 只有当前显示温度图表时才更新图表
         if (chartType.value === 'temperature') {
-          updateChart(tempChart, tempData.value, data.value)
+          updateChart(mainChart, tempData.value, data.value)
         } else {
-          // 仍然保存数据，但不更新图表
           addDataPoint(tempData.value, data.value)
         }
       } else if (data.sensor_type === 'pressure') {
         currentPressure.value = data.value
-        updateChart(pressureChart, pressureData.value, data.value)
+        // 只有当前显示压力图表时才更新图表
+        if (chartType.value === 'pressure') {
+          updateChart(mainChart, pressureData.value, data.value)
+        } else {
+          addDataPoint(pressureData.value, data.value)
+        }
       } else if (data.sensor_type === 'humidity') {
         currentHumidity.value = data.value
-        // 只有当前显示湿度图表时才更新
+        // 只有当前显示湿度图表时才更新图表
         if (chartType.value === 'humidity') {
-          updateChart(tempChart, humidityData.value, data.value)
+          updateChart(mainChart, humidityData.value, data.value)
         } else {
-          // 仍然保存数据，但不更新图表
           addDataPoint(humidityData.value, data.value)
         }
       }
@@ -1119,6 +1316,26 @@ const setupWebSocket = async () => {
           shape: data.shape,
           confidence: data.confidence
         }
+        
+        // 累计产品计数并同步到后端
+        if (data.product_type === 'product_a' || data.product_type === 'product_b') {
+          if (data.product_type === 'product_a') {
+            productACount.value++
+          } else {
+            productBCount.value++
+          }
+          productionCount.value++
+          
+          // 同步到后端数据库
+          syncProductionCount()
+        }
+        
+        // 显示检测成功提示
+        ElMessage({
+          message: `📦 检测到 ${data.product_type === 'product_a' ? '产品A' : '产品B'} (${data.color}/${data.shape})`,
+          type: 'success',
+          duration: 2000
+        })
       }
     })
     
@@ -1177,6 +1394,11 @@ const setupWebSocket = async () => {
   }
 }
 
+// 监听历史数据类型变化
+watch(historyType, () => {
+  loadHistoryData()
+})
+
 // 生命周期
 let timeInterval = null
 
@@ -1191,12 +1413,19 @@ onMounted(async () => {
   await loadPlanProgress()
   await loadDetectionMode()
   await loadZoneStatistics()
+  await loadThresholds()
   await setupWebSocket()
+  
+  // 初始化历史图表
+  nextTick(() => {
+    initHistoryChart()
+    loadHistoryData()
+  })
   
   // 窗口大小变化时重绘图表
   window.addEventListener('resize', () => {
-    tempChart?.resize()
-    pressureChart?.resize()
+    mainChart?.resize()
+    historyChart?.resize()
   })
 })
 
@@ -1206,9 +1435,39 @@ onUnmounted(() => {
   if (alarmTimeout) clearTimeout(alarmTimeout)
   stopAlarmSound()
   wsClient.close()
-  tempChart?.dispose()
-  pressureChart?.dispose()
+  mainChart?.dispose()
+  historyChart?.dispose()
 })
+
+// 加载阈值配置
+const loadThresholds = async () => {
+  try {
+    const response = await fetch(`http://${window.location.hostname}:8000/api/thresholds/${deviceId.value}`)
+    if (response.ok) {
+      const data = await response.json()
+      thresholds.value = data
+    }
+  } catch (e) {
+    console.log('加载阈值配置失败，使用默认值')
+  }
+}
+
+// 同步产品计数到后端（防抖处理）
+let syncTimeout = null
+const syncProductionCount = () => {
+  if (syncTimeout) clearTimeout(syncTimeout)
+  syncTimeout = setTimeout(async () => {
+    try {
+      await fetch(`http://${window.location.hostname}:8000/api/status/${deviceId.value}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ production_count: productionCount.value })
+      })
+    } catch (e) {
+      console.log('同步产品计数失败')
+    }
+  }, 500)  // 500ms防抖，避免频繁请求
+}
 </script>
 
 
@@ -1409,13 +1668,14 @@ onUnmounted(() => {
 
 .status-indicator {
   display: inline-block;
-  padding: 10px 28px;
-  border-radius: 4px;
-  font-size: 15px;
-  font-weight: 600;
+  padding: 15px 35px;
+  border-radius: 6px;
+  font-size: 24px;
+  font-weight: 700;
   margin-bottom: 12px;
-  letter-spacing: 2px;
+  letter-spacing: 3px;
   font-family: var(--font-mono);
+  text-transform: uppercase;
 }
 
 .status-indicator.running {
@@ -1471,14 +1731,18 @@ onUnmounted(() => {
 /* 控制面板 */
 .control-buttons {
   display: flex;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-bottom: 16px;
 }
 
 .control-buttons .el-button {
-  flex: 1;
+  flex: 1 1 80px;
+  min-width: 70px;
   font-weight: 500;
-  letter-spacing: 1px;
+  letter-spacing: 0.5px;
+  padding: 8px 12px;
+  font-size: 13px;
 }
 
 .mode-switch {
@@ -1506,7 +1770,6 @@ onUnmounted(() => {
 
 /* 报警列表 */
 .alert-card {
-  flex: 1;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -1515,7 +1778,7 @@ onUnmounted(() => {
 .alert-list {
   flex: 1;
   overflow-y: auto;
-  max-height: 200px;
+  max-height: 150px;
 }
 
 .alert-list::-webkit-scrollbar {
@@ -2270,15 +2533,28 @@ onUnmounted(() => {
 
 /* Element Plus 输入框样式 */
 .el-input-number {
-  --el-input-bg-color: rgba(255, 255, 255, 0.05);
+  --el-input-bg-color: rgba(20, 30, 50, 0.9);
   --el-input-border-color: var(--border-color);
   --el-input-text-color: var(--text-primary);
+  --el-fill-color-light: rgba(30, 45, 70, 0.9);
 }
 
 .el-input-number .el-input__inner {
-  background: rgba(255, 255, 255, 0.05);
-  border-color: var(--border-color);
-  color: var(--text-primary);
+  background: rgba(20, 30, 50, 0.9) !important;
+  border-color: var(--border-color) !important;
+  color: #ffffff !important;
+}
+
+.el-input-number .el-input-number__decrease,
+.el-input-number .el-input-number__increase {
+  background: rgba(30, 45, 70, 0.9) !important;
+  border-color: var(--border-color) !important;
+  color: var(--text-secondary) !important;
+}
+
+.el-input-number .el-input-number__decrease:hover,
+.el-input-number .el-input-number__increase:hover {
+  color: var(--primary-color) !important;
 }
 
 /* Switch 样式 */
@@ -2350,5 +2626,92 @@ onUnmounted(() => {
 .no-product {
   color: var(--text-muted);
   font-size: 13px;
+}
+
+/* ========================================
+   环境阈值配置样式
+   ======================================== */
+.threshold-card .threshold-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.threshold-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.threshold-label {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.8);
+  min-width: 120px;
+}
+
+.threshold-inputs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.threshold-separator {
+  color: rgba(255, 255, 255, 0.5);
+  font-weight: bold;
+}
+
+.threshold-inputs .el-input-number {
+  width: 80px;
+}
+
+/* ========================================
+   历史数据样式
+   ======================================== */
+.history-card .history-range {
+  margin: 10px 0;
+  text-align: center;
+}
+
+.history-chart-container {
+  height: 200px;
+  margin-top: 10px;
+}
+
+.history-card .el-select {
+  --el-select-input-color: var(--text-primary);
+  --el-select-border-color: var(--border-color);
+}
+
+.history-card .el-radio-group {
+  --el-radio-button-checked-bg-color: var(--primary-color);
+  --el-radio-button-checked-border-color: var(--primary-color);
+}
+
+.history-card .el-radio-button__inner {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--border-color);
+  color: var(--text-secondary);
+  padding: 6px 12px;
+}
+
+/* ========================================
+   响应式设计
+   ======================================== */
+@media (max-width: 1200px) {
+  .dashboard .main-content {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto auto;
+  }
+  
+  .left-panel, .right-panel {
+    grid-column: 1;
+  }
+  
+  .center-panel {
+    grid-column: 1;
+    grid-row: 2;
+  }
 }
 </style>

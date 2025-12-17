@@ -670,6 +670,26 @@ async def get_dashboard(device_id: str = "device_001", db: Session = Depends(get
     )
 
 
+# ---------- 环境阈值配置API ----------
+# 存储设备阈值配置
+device_thresholds = {}
+
+@app.post("/api/thresholds/{device_id}", tags=["环境监控"])
+async def set_thresholds(device_id: str, thresholds: dict):
+    """设置设备环境阈值"""
+    device_thresholds[device_id] = thresholds
+    return {"message": "阈值配置已保存", "thresholds": thresholds}
+
+@app.get("/api/thresholds/{device_id}", tags=["环境监控"])
+async def get_thresholds(device_id: str):
+    """获取设备环境阈值"""
+    return device_thresholds.get(device_id, {
+        "tempMin": 10, "tempMax": 35,
+        "humidityMin": 20, "humidityMax": 80,
+        "pressureMin": 90, "pressureMax": 110
+    })
+
+
 # ---------- 视频流API ----------
 # 存储最新的视频帧
 latest_video_frames = {}

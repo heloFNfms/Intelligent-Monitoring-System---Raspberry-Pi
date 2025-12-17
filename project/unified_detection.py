@@ -1172,6 +1172,40 @@ class UnifiedDetectionSystem:
                 new_mode = self.server.get_detection_mode()
                 self.set_mode(new_mode)
     
+    def _update_thresholds_from_server(self):
+        """从服务器更新环境阈值"""
+        if not hasattr(self, 'last_threshold_check'):
+            self.last_threshold_check = 0
+            self.threshold_check_interval = 5  # 每10秒检查一次（加快响应）
+        
+        current_time = time.time()
+        if current_time - self.last_threshold_check >= self.threshold_check_interval:
+            self.last_threshold_check = current_time
+            if self.server:
+                try:
+                    response = requests.get(
+                        f"{self.server.server_url}/api/thresholds/{DEVICE_ID}",
+                        timeout=2
+                    )
+                    if response.status_code == 200:
+                        thresholds = response.json()
+                        old_values = (self.temp_min, self.temp_max, self.humidity_min, self.humidity_max)
+                        
+                        self.temp_min = float(thresholds.get('tempMin', self.temp_min))
+                        self.temp_max = float(thresholds.get('tempMax', self.temp_max))
+                        self.humidity_min = float(thresholds.get('humidityMin', self.humidity_min))
+                        self.humidity_max = float(thresholds.get('humidityMax', self.humidity_max))
+                        self.pressure_min = float(thresholds.get('pressureMin', self.pressure_min))
+                        self.pressure_max = float(thresholds.get('pressureMax', self.pressure_max))
+                        
+                        new_values = (self.temp_min, self.temp_max, self.humidity_min, self.humidity_max)
+                        if old_values != new_values:
+                            print(f"🔧 阈值已更新: 温度{self.temp_min}-{self.temp_max}°C, 湿度{self.humidity_min}-{self.humidity_max}%")
+                            # 阈值更新后立即重新检查环境状态
+                            self._force_env_check = True
+                except Exception as e:
+                    pass  # 静默失败，使用默认阈值
+    
     def _check_env_abnormal(self, temperature: float, humidity: float, pressure: float) -> bool:
         """
         检查环境是否异常
@@ -1249,14 +1283,19 @@ class UnifiedDetectionSystem:
         pressure = self.simulated_pressure
         
         if temperature is not None and humidity is not None:
-            print(f"🌡️ 温度: {temperature:.1f}°C | 💧 湿度: {humidity:.1f}% | 📊 压力: {pressure:.1f}kPa")
+            print(f"🌡️ 温度: {temperature:.1f}°C | 💧 湿度: {humidity:.1f}% | 📊 压力: {pressure:.1f}kPa | 阈值: {self.temp_min}-{self.temp_max}°C")
             
             # 检查环境是否异常
             old_env_abnormal = self.env_abnormal
             self.env_abnormal = self._check_env_abnormal(temperature, humidity, pressure)
             
-            # 如果环境状态变化，更新LED
-            if old_env_abnormal != self.env_abnormal:
+            # 检查是否需要强制更新（阈值变化后）
+            force_check = getattr(self, '_force_env_check', False)
+            if force_check:
+                self._force_env_check = False
+            
+            # 如果环境状态变化或强制检查，更新LED
+            if old_env_abnormal != self.env_abnormal or force_check:
                 if self.env_abnormal:
                     print("🔴 环境异常，红灯亮起")
                     self.gpio.buzzer_beep(0.3)  # 短促警报
@@ -1592,6 +1631,9 @@ class UnifiedDetectionSystem:
                 
                 # 检查服务器模式（低频率）
                 self._check_mode_from_server()
+                
+                # 更新环境阈值（每30秒一次）
+                self._update_thresholds_from_server()
                 
                 # 上报温湿度传感器数据（每5秒一次）
                 self._report_sensor_data()
