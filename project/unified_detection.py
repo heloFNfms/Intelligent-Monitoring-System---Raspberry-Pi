@@ -32,16 +32,30 @@ IS_LINUX = platform.system() == "Linux"
 if IS_WINDOWS:
     import winsound
 
+# 尝试导入 picamera2（树莓派CSI摄像头）
+PICAMERA2_AVAILABLE = False
+if IS_LINUX:
+    try:
+        from picamera2 import Picamera2
+        PICAMERA2_AVAILABLE = True
+        print("✓ picamera2 可用")
+    except ImportError:
+        print("⚠️ picamera2 不可用，将尝试其他方式打开摄像头")
+
 # ==================== 配置 ====================
-SERVER_URL = "http://localhost:8000"
+#SERVER_URL = "http://localhost:8000"
+"树莓派使用"
+SERVER_URL = "http://192.168.137.1:8000"
+
 DEVICE_ID = "device_001"
 ENABLE_SERVER_REPORT = True
 ENABLE_VIDEO_STREAM = True
 VIDEO_STREAM_FPS = 10
 VIDEO_QUALITY = 50
 
-CAMERA_WIDTH = 640
-CAMERA_HEIGHT = 480
+# 树莓派优化：降低分辨率提高帧率
+CAMERA_WIDTH = 480
+CAMERA_HEIGHT = 360
 
 
 class DetectionMode(Enum):
@@ -370,11 +384,13 @@ class PersonTracker:
 class ZoneDetector:
     """危险区域检测器 - 基于YOLOv8，支持人员状态追踪"""
     
-    def __init__(self, model_path: str = "yolov8n.pt", frame_skip: int = 3,
+    def __init__(self, model_path: str = "yolov8n_ncnn_model", frame_skip: int = 3,
                  input_size: Tuple[int, int] = (320, 320), alert_cooldown: float = 3.0):
         print("正在加载YOLOv8模型...")
         self.model = YOLO(model_path)
-        self.model.fuse()
+        # NCNN 模型不需要 fuse()
+        if model_path.endswith(".pt"):
+            self.model.fuse()
         
         self.danger_zones: List[np.ndarray] = []
         self.safe_zones: List[np.ndarray] = []
@@ -442,75 +458,71 @@ class ZoneDetector:
         print("✓ 统计信息已重置")
     
     def detect(self, frame: np.ndarray, conf_threshold: float = 0.5) -> Tuple[np.ndarray, dict]:
-        """执行危险区域检测"""
+        """执行危险区域检测（异步模式下每次调用都执行检测）"""
         h_orig, w_orig = frame.shape[:2]
         output = frame.copy()
         
-        self.frame_count += 1
-        should_detect = (self.frame_count % self.frame_skip == 0)
-        
         events = []  # 状态变化事件
         
-        # YOLO检测
-        if should_detect:
-            if self.input_size:
-                resized = cv2.resize(frame, self.input_size)
-                self.scale_x = w_orig / self.input_size[0]
-                self.scale_y = h_orig / self.input_size[1]
-            else:
-                resized = frame
-                self.scale_x = self.scale_y = 1.0
+        # YOLO检测 - 异步模式下每次都执行
+        if self.input_size:
+            resized = cv2.resize(frame, self.input_size)
+            self.scale_x = w_orig / self.input_size[0]
+            self.scale_y = h_orig / self.input_size[1]
+        else:
+            resized = frame
+            self.scale_x = self.scale_y = 1.0
+        
+        results = self.model(resized, conf=conf_threshold, classes=[self.person_class_id],
+                           verbose=False, device='cpu')
+        
+        self.last_detections = []
+        for result in results:
+            for box in result.boxes:
+                x1, y1, x2, y2 = map(int, box.xyxy[0].cpu().numpy())
+                conf = float(box.conf[0])
+                x1, y1 = int(x1 * self.scale_x), int(y1 * self.scale_y)
+                x2, y2 = int(x2 * self.scale_x), int(y2 * self.scale_y)
+                self.last_detections.append((x1, y1, x2, y2, conf))
+        
+        # 更新追踪器并获取状态变化事件
+        events = self.tracker.update(self.last_detections, self._get_person_state)
+        
+        # 处理状态变化事件
+        for event in events:
+            track_id = event["track_id"]
+            event_type = event["event"]
+            bbox = event["bbox"]
             
-            results = self.model(resized, conf=conf_threshold, classes=[self.person_class_id],
-                               verbose=False, device='cpu')
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
-            self.last_detections = []
-            for result in results:
-                for box in result.boxes:
-                    x1, y1, x2, y2 = map(int, box.xyxy[0].cpu().numpy())
-                    conf = float(box.conf[0])
-                    x1, y1 = int(x1 * self.scale_x), int(y1 * self.scale_y)
-                    x2, y2 = int(x2 * self.scale_x), int(y2 * self.scale_y)
-                    self.last_detections.append((x1, y1, x2, y2, conf))
+            if event_type == "enter":
+                # 进入危险区
+                self.statistics.person_entered(track_id)
+                if self.alert_callback:
+                    alert = AlertInfo(
+                        timestamp=timestamp,
+                        zone_type="danger",
+                        person_count=self.statistics.current_in_danger,
+                        message=f"⚠️ 人员进入危险区域！当前危险区人数: {self.statistics.current_in_danger}",
+                        bbox=bbox,
+                        event_type="enter"
+                    )
+                    self.alert_callback(alert)
             
-            # 更新追踪器并获取状态变化事件
-            events = self.tracker.update(self.last_detections, self._get_person_state)
-            
-            # 处理状态变化事件
-            for event in events:
-                track_id = event["track_id"]
-                event_type = event["event"]
-                bbox = event["bbox"]
-                
-                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                
-                if event_type == "enter":
-                    # 进入危险区
-                    self.statistics.person_entered(track_id)
-                    if self.alert_callback:
-                        alert = AlertInfo(
-                            timestamp=timestamp,
-                            zone_type="danger",
-                            person_count=self.statistics.current_in_danger,
-                            message=f"⚠️ 人员进入危险区域！当前危险区人数: {self.statistics.current_in_danger}",
-                            bbox=bbox,
-                            event_type="enter"
-                        )
-                        self.alert_callback(alert)
-                
-                elif event_type in ["exit", "exit_timeout"]:
-                    # 离开危险区
-                    self.statistics.person_exited(track_id)
-                    if self.exit_callback:
-                        alert = AlertInfo(
-                            timestamp=timestamp,
-                            zone_type="safe",
-                            person_count=self.statistics.current_in_danger,
-                            message=f"✅ 人员离开危险区域！当前危险区人数: {self.statistics.current_in_danger}",
-                            bbox=bbox,
-                            event_type="exit"
-                        )
-                        self.exit_callback(alert)
+            elif event_type in ["exit", "exit_timeout"]:
+                # 离开危险区
+                self.statistics.person_exited(track_id)
+                if self.exit_callback:
+                    alert = AlertInfo(
+                        timestamp=timestamp,
+                        zone_type="safe",
+                        person_count=self.statistics.current_in_danger,
+                        message=f"✅ 人员离开危险区域！当前危险区人数: {self.statistics.current_in_danger}",
+                        bbox=bbox,
+                        event_type="exit"
+                    )
+                    self.exit_callback(alert)
         
         # 绘制区域
         overlay = output.copy()
@@ -810,6 +822,7 @@ class UnifiedDetectionSystem:
     3. 默认运行危险区域检测
     4. 按需切换到产品检测
     5. 人员进入/离开危险区域的状态追踪和统计
+    6. 异步检测：主线程显示画面，检测线程独立运行（树莓派优化）
     """
     
     def __init__(self, camera_id: int = 0):
@@ -842,6 +855,16 @@ class UnifiedDetectionSystem:
         # 模式检查间隔
         self.last_mode_check = 0
         self.mode_check_interval = 1.0  # 每秒检查一次
+        
+        # ========== 异步检测相关 ==========
+        # 用于线程间共享的帧和检测结果
+        self._frame_lock = threading.Lock()
+        self._result_lock = threading.Lock()
+        self._latest_frame = None           # 最新的摄像头帧
+        self._latest_result = None          # 最新的检测结果
+        self._latest_processed_frame = None # 最新的处理后帧（带标注）
+        self._detection_thread = None       # 检测线程
+        self._detection_running = False     # 检测线程运行标志
     
     def init_detectors(self):
         """初始化检测器"""
@@ -850,9 +873,18 @@ class UnifiedDetectionSystem:
         print("="*60)
         
         # 初始化危险区域检测器
+        # 尝试使用NCNN模型，如果不可用则回退到PyTorch模型
+        import os
+        if os.path.exists("yolov8n_ncnn_model"):
+            model_path = "yolov8n_ncnn_model"
+            print("✓ 使用 NCNN 格式模型（ARM优化）")
+        else:
+            model_path = "yolov8n.pt"
+            print("⚠️ NCNN模型不可用，使用 PyTorch 模型")
+        
         self.zone_detector = ZoneDetector(
-            model_path="yolov8n.pt",
-            frame_skip=3,
+            model_path=model_path,
+            frame_skip=1,
             input_size=(320, 320),
             alert_cooldown=3.0
         )
@@ -995,21 +1027,202 @@ class UnifiedDetectionSystem:
                 self.server.report_product(detection_info)
             threading.Thread(target=_report, daemon=True).start()
     
+    def _detection_worker(self):
+        """
+        异步检测工作线程
+        独立运行YOLO检测，不阻塞主线程的画面显示
+        """
+        print("🔄 异步检测线程已启动")
+        
+        while self._detection_running:
+            # 获取最新帧
+            with self._frame_lock:
+                if self._latest_frame is None:
+                    time.sleep(0.01)
+                    continue
+                frame = self._latest_frame.copy()
+            
+            # 执行检测（这是耗时操作）
+            current_mode = self.get_mode()
+            
+            try:
+                if current_mode == DetectionMode.ZONE:
+                    processed_frame, detection_info = self.zone_detector.detect(frame)
+                else:
+                    processed_frame, detection_info = self.product_detector.detect(frame)
+                
+                # 保存检测结果
+                with self._result_lock:
+                    self._latest_result = detection_info
+                    self._latest_processed_frame = processed_frame
+                
+                # 上报检测结果
+                self._report_detection(detection_info)
+                
+            except Exception as e:
+                print(f"检测线程错误: {e}")
+                time.sleep(0.1)
+        
+        print("🔄 异步检测线程已停止")
+    
+    def _draw_overlay_on_frame(self, frame: np.ndarray) -> np.ndarray:
+        """
+        在原始帧上绘制检测结果叠加层
+        使用最新的检测结果，但不阻塞等待新检测
+        """
+        h, w = frame.shape[:2]
+        output = frame.copy()
+        
+        # 获取最新检测结果
+        with self._result_lock:
+            detection_info = self._latest_result
+            processed_frame = self._latest_processed_frame
+        
+        current_mode = self.get_mode()
+        
+        if current_mode == DetectionMode.ZONE:
+            # 绘制危险区域和安全区域
+            overlay = output.copy()
+            for zone in self.zone_detector.danger_zones:
+                cv2.fillPoly(overlay, [zone], (0, 0, 200))
+                cv2.polylines(output, [zone], True, (0, 0, 255), 2)
+            for zone in self.zone_detector.safe_zones:
+                cv2.fillPoly(overlay, [zone], (0, 200, 0))
+                cv2.polylines(output, [zone], True, (0, 255, 0), 2)
+            cv2.addWeighted(overlay, 0.3, output, 0.7, 0, output)
+            
+            # 绘制警戒线
+            mid_x = w // 2
+            cv2.line(output, (mid_x, 0), (mid_x, h), (0, 255, 255), 2)
+            cv2.putText(output, "WARNING LINE", (mid_x + 10, 30),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+            
+            # 绘制检测框（使用缓存的检测结果）
+            for detection in self.zone_detector.last_detections:
+                x1, y1, x2, y2, conf = detection
+                center = self.zone_detector._get_person_center((x1, y1, x2, y2))
+                in_danger = any(self.zone_detector._point_in_zone(center, zone) 
+                               for zone in self.zone_detector.danger_zones)
+                
+                if in_danger:
+                    color = (0, 0, 255)
+                    label = "DANGER!"
+                else:
+                    color = (0, 255, 0)
+                    label = "Person"
+                
+                cv2.rectangle(output, (x1, y1), (x2, y2), color, 2)
+                cv2.putText(output, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                cv2.circle(output, center, 4, color, -1)
+            
+            # 显示统计信息
+            stats = self.zone_detector.statistics
+            y_offset = 30
+            
+            if stats.current_in_danger > 0:
+                cv2.putText(output, f"WARNING: {stats.current_in_danger} in DANGER ZONE!", (10, y_offset),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+                y_offset += 30
+            
+            cv2.putText(output, f"Persons: {len(self.zone_detector.last_detections)}", (10, y_offset),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            y_offset += 25
+            
+            cv2.putText(output, f"In Danger: {stats.current_in_danger}", (10, y_offset),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+            y_offset += 25
+            
+            cv2.putText(output, f"Entries: {stats.total_entries} | Exits: {stats.total_exits}", (10, y_offset),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 200, 100), 1)
+            
+            cv2.putText(output, "[ZONE MODE - ASYNC]", (w - 200, 30),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+        
+        else:
+            # 产品检测模式 - 使用处理后的帧（如果有）
+            if processed_frame is not None and detection_info and detection_info.get("mode") == "product":
+                return processed_frame
+            
+            # 绘制检测区域
+            cv2.rectangle(output, (50, 50), (w-50, h-50), (100, 100, 100), 2)
+            cv2.putText(output, "Detection Area", (55, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 100, 100), 1)
+            
+            # 统计信息
+            cv2.putText(output, f"Product A: {self.product_detector.detection_count['product_a']}", (10, 30),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, self.product_detector.COLOR_RANGES["product_a"]["display_color"], 2)
+            cv2.putText(output, f"Product B: {self.product_detector.detection_count['product_b']}", (10, 55),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, self.product_detector.COLOR_RANGES["product_b"]["display_color"], 2)
+            
+            cv2.putText(output, "[PRODUCT MODE - ASYNC]", (w - 220, 30),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 150, 50), 2)
+        
+        return output
+    
     def run(self, headless: bool = False):
         """运行检测系统"""
         # 初始化检测器
         self.init_detectors()
         
-        # 打开摄像头
-        self.cap = cv2.VideoCapture(self.camera_id)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
-        self.cap.set(cv2.CAP_PROP_FPS, 30)
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        # 打开摄像头 - 支持树莓派CSI摄像头
+        self.picam2 = None  # picamera2 实例
+        self.use_picamera2 = False
         
-        if not self.cap.isOpened():
+        if IS_LINUX and PICAMERA2_AVAILABLE:
+            # 优先使用 picamera2（树莓派CSI摄像头最佳方案）
+            try:
+                print("尝试使用 picamera2 打开摄像头...")
+                self.picam2 = Picamera2()
+                config = self.picam2.create_preview_configuration(
+                    main={"size": (CAMERA_WIDTH, CAMERA_HEIGHT), "format": "RGB888"}
+                )
+                self.picam2.configure(config)
+                self.picam2.start()
+                self.use_picamera2 = True
+                print("✓ 使用 picamera2 打开摄像头成功")
+            except Exception as e:
+                print(f"picamera2 打开失败: {e}")
+                self.picam2 = None
+        
+        if not self.use_picamera2:
+            if IS_LINUX:
+                # 树莓派CSI摄像头 - 尝试其他方式
+                camera_opened = False
+                
+                # 方法1: 使用 /dev/video0
+                print("尝试打开摄像头...")
+                self.cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
+                if self.cap.isOpened():
+                    camera_opened = True
+                    print("✓ 使用 V4L2 打开摄像头成功")
+                
+                # 方法2: 直接打开
+                if not camera_opened:
+                    print("尝试直接打开摄像头...")
+                    self.cap = cv2.VideoCapture(self.camera_id)
+                    if self.cap.isOpened():
+                        camera_opened = True
+                        print("✓ 直接打开摄像头成功")
+                
+                if camera_opened:
+                    self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
+                    self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
+                    self.cap.set(cv2.CAP_PROP_FPS, 30)
+                    self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            else:
+                # Windows/其他系统使用默认方式
+                self.cap = cv2.VideoCapture(self.camera_id)
+                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
+                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
+                self.cap.set(cv2.CAP_PROP_FPS, 30)
+                self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        
+        if not self.use_picamera2 and (self.cap is None or not self.cap.isOpened()):
             print("错误：无法打开摄像头")
+            print("提示：如果使用树莓派CSI摄像头，请尝试：")
+            print("  1. 运行 'rpicam-hello' 确认摄像头正常")
+            print("  2. 确保已安装 picamera2: sudo apt install python3-picamera2")
             return
+        
         
         print("\n" + "="*60)
         print("🎬 统一检测系统已启动")
@@ -1035,34 +1248,47 @@ class UnifiedDetectionSystem:
         if not headless:
             cv2.namedWindow(window_name)
         
+        # ========== 启动异步检测线程 ==========
+        self._detection_running = True
+        self._detection_thread = threading.Thread(target=self._detection_worker, daemon=True)
+        self._detection_thread.start()
+        print("✓ 异步检测模式已启用（画面流畅，检测独立运行）")
+        
         fps_start_time = time.time()
         fps_frame_count = 0
         fps = 0
         
         try:
             while self.running:
-                ret, frame = self.cap.read()
-                if not ret:
+                # 读取帧 - 支持 picamera2 和 OpenCV
+                if self.use_picamera2:
+                    frame = self.picam2.capture_array()
+                    # picamera2 返回 RGB，需要转换为 BGR（OpenCV格式）
+                    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                    ret = True
+                else:
+                    ret, frame = self.cap.read()
+                
+                if not ret or frame is None:
                     print("错误：无法读取帧")
                     break
                 
-                # 检查服务器模式
+                # 更新最新帧供检测线程使用
+                with self._frame_lock:
+                    self._latest_frame = frame.copy()
+                
+                # 检查服务器模式（低频率）
                 self._check_mode_from_server()
                 
-                # 根据模式执行检测
-                current_mode = self.get_mode()
-                
-                if current_mode == DetectionMode.ZONE:
-                    processed_frame, detection_info = self.zone_detector.detect(frame)
-                else:
-                    processed_frame, detection_info = self.product_detector.detect(frame)
-                
-                # 上报检测结果
-                self._report_detection(detection_info)
+                # 在原始帧上绘制检测结果叠加层（不阻塞）
+                display_frame = self._draw_overlay_on_frame(frame)
                 
                 # 推送视频流
                 if ENABLE_VIDEO_STREAM:
-                    self._stream_frame(processed_frame, detection_info)
+                    with self._result_lock:
+                        detection_info = self._latest_result
+                    if detection_info:
+                        self._stream_frame(display_frame, detection_info)
                 
                 # 计算FPS
                 fps_frame_count += 1
@@ -1071,15 +1297,15 @@ class UnifiedDetectionSystem:
                     fps_start_time = time.time()
                     fps_frame_count = 0
                 
-                cv2.putText(processed_frame, f"FPS: {fps:.1f}", (10, CAMERA_HEIGHT - 10),
+                cv2.putText(display_frame, f"FPS: {fps:.1f}", (10, CAMERA_HEIGHT - 10),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
                 
                 # 显示操作提示
-                cv2.putText(processed_frame, "1:Zone 2:Product c:Capture r:Reset q:Quit",
+                cv2.putText(display_frame, "1:Zone 2:Product c:Capture r:Reset q:Quit",
                            (10, CAMERA_HEIGHT - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
                 
                 if not headless:
-                    cv2.imshow(window_name, processed_frame)
+                    cv2.imshow(window_name, display_frame)
                     key = cv2.waitKey(1) & 0xFF
                     
                     if key == ord('q'):
@@ -1089,13 +1315,13 @@ class UnifiedDetectionSystem:
                         self.set_mode(DetectionMode.ZONE)
                     elif key == ord('2'):
                         self.set_mode(DetectionMode.PRODUCT)
-                    elif key == ord('c') and current_mode == DetectionMode.PRODUCT:
+                    elif key == ord('c') and self.get_mode() == DetectionMode.PRODUCT:
                         result = self.product_detector.capture(frame)
                         if result and self.server:
                             self.server.report_product(result)
                     elif key == ord('r'):
                         # 重置计数
-                        if current_mode == DetectionMode.PRODUCT:
+                        if self.get_mode() == DetectionMode.PRODUCT:
                             self.product_detector.reset_count()
                         else:
                             self.zone_detector.reset_statistics()
@@ -1109,7 +1335,18 @@ class UnifiedDetectionSystem:
             print("\n\n收到中断信号，正在退出...")
         finally:
             self.running = False
-            if self.cap:
+            
+            # 停止检测线程
+            self._detection_running = False
+            if self._detection_thread and self._detection_thread.is_alive():
+                self._detection_thread.join(timeout=2.0)
+                print("✓ 检测线程已停止")
+            
+            # 释放摄像头资源
+            if self.use_picamera2 and self.picam2:
+                self.picam2.stop()
+                print("✓ picamera2 已停止")
+            elif self.cap:
                 self.cap.release()
             if not headless:
                 cv2.destroyAllWindows()
