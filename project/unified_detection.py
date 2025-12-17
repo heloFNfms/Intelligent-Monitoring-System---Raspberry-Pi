@@ -42,6 +42,17 @@ if IS_LINUX:
     except ImportError:
         print("⚠️ picamera2 不可用，将尝试其他方式打开摄像头")
 
+# 尝试导入 DHT11 温湿度传感器
+DHT_AVAILABLE = False
+if IS_LINUX:
+    try:
+        import board
+        import adafruit_dht
+        DHT_AVAILABLE = True
+        print("✓ DHT11 传感器库可用")
+    except ImportError:
+        print("⚠️ DHT11 库不可用，温湿度功能禁用")
+
 # ==================== 配置 ====================
 #SERVER_URL = "http://localhost:8000"
 "树莓派使用"
@@ -762,15 +773,88 @@ class ProductDetector:
 
 
 
+# ==================== DHT11 温湿度传感器 ====================
+class DHT11Sensor:
+    """DHT11 温湿度传感器"""
+    
+    def __init__(self, pin=4):
+        """
+        初始化 DHT11 传感器
+        Args:
+            pin: GPIO 针脚号（BCM编号），默认 GPIO4
+        """
+        self.dht_device = None
+        self.last_temperature = None
+        self.last_humidity = None
+        self.initialized = False
+        
+        if DHT_AVAILABLE:
+            try:
+                # 根据 pin 号选择对应的 board 针脚
+                pin_map = {4: board.D4, 17: board.D17, 27: board.D27, 22: board.D22}
+                board_pin = pin_map.get(pin, board.D4)
+                self.dht_device = adafruit_dht.DHT11(board_pin)
+                self.initialized = True
+                print(f"✓ DHT11 传感器初始化成功 | GPIO{pin}")
+            except Exception as e:
+                print(f"⚠️ DHT11 初始化失败: {e}")
+        else:
+            print("⚠️ DHT11 库不可用")
+    
+    def read(self) -> Tuple[Optional[float], Optional[float]]:
+        """
+        读取温湿度
+        Returns:
+            (temperature, humidity) 或 (None, None) 如果读取失败
+        """
+        if not self.initialized:
+            return None, None
+        
+        try:
+            temperature = self.dht_device.temperature
+            humidity = self.dht_device.humidity
+            
+            if temperature is not None and humidity is not None:
+                self.last_temperature = temperature
+                self.last_humidity = humidity
+                return temperature, humidity
+        except RuntimeError:
+            # DHT11 偶尔读取失败是正常的
+            pass
+        except Exception as e:
+            print(f"DHT11 读取错误: {e}")
+        
+        # 返回上次成功读取的值
+        return self.last_temperature, self.last_humidity
+    
+    def cleanup(self):
+        """清理资源"""
+        if self.dht_device:
+            try:
+                self.dht_device.exit()
+            except:
+                pass
+
+
 # ==================== GPIO控制器 ====================
 class GPIOController:
-    """GPIO控制器 - 管理LED和蜂鸣器"""
+    """
+    GPIO控制器 - 管理三个LED灯
     
-    def __init__(self, led_pin: int = 16, buzzer_pin: int = 18):
-        self.led_pin = led_pin
-        self.buzzer_pin = buzzer_pin
+    LED状态逻辑：
+    - 红灯(GPIO22): 环境异常（温度/湿度超标）
+    - 蓝灯(GPIO17): 有人在危险区域
+    - 绿灯(GPIO27): 系统正常运行
+    """
+    
+    def __init__(self, led_red_pin: int = 22, led_blue_pin: int = 17, led_green_pin: int = 27):
+        self.led_red_pin = led_red_pin      # 红灯 - 环境异常
+        self.led_blue_pin = led_blue_pin    # 蓝灯 - 危险区域有人
+        self.led_green_pin = led_green_pin  # 绿灯 - 正常
         self.gpio_initialized = False
-        self.led_state = False
+        
+        # LED 状态
+        self.led_states = {"red": False, "blue": False, "green": False}
         
         if IS_LINUX:
             try:
@@ -778,35 +862,106 @@ class GPIOController:
                 self.GPIO = GPIO
                 GPIO.setmode(GPIO.BCM)
                 GPIO.setwarnings(False)
-                GPIO.setup(self.led_pin, GPIO.OUT)
-                GPIO.output(self.led_pin, GPIO.LOW)
-                GPIO.setup(self.buzzer_pin, GPIO.OUT)
-                GPIO.output(self.buzzer_pin, GPIO.LOW)
+                
+                # 初始化三个 LED
+                GPIO.setup(self.led_red_pin, GPIO.OUT)
+                GPIO.output(self.led_red_pin, GPIO.LOW)
+                
+                GPIO.setup(self.led_blue_pin, GPIO.OUT)
+                GPIO.output(self.led_blue_pin, GPIO.LOW)
+                
+                GPIO.setup(self.led_green_pin, GPIO.OUT)
+                GPIO.output(self.led_green_pin, GPIO.LOW)
+                
                 self.gpio_initialized = True
-                print(f"✓ GPIO初始化成功 | LED: {led_pin} | 蜂鸣器: {buzzer_pin}")
+                print(f"✓ GPIO初始化成功")
+                print(f"  红灯(环境异常): GPIO{led_red_pin}")
+                print(f"  蓝灯(危险区域): GPIO{led_blue_pin}")
+                print(f"  绿灯(正常): GPIO{led_green_pin}")
             except ImportError:
                 print("⚠️ RPi.GPIO未安装，GPIO功能禁用")
             except Exception as e:
                 print(f"⚠️ GPIO初始化失败: {e}")
     
-    def turn_on_led(self):
-        if self.gpio_initialized and not self.led_state:
-            self.GPIO.output(self.led_pin, self.GPIO.HIGH)
-            self.led_state = True
+    def _get_pin(self, color: str) -> int:
+        """获取颜色对应的GPIO针脚"""
+        pin_map = {
+            "red": self.led_red_pin,
+            "blue": self.led_blue_pin,
+            "green": self.led_green_pin
+        }
+        return pin_map.get(color, self.led_green_pin)
     
-    def turn_off_led(self):
-        if self.gpio_initialized and self.led_state:
-            self.GPIO.output(self.led_pin, self.GPIO.LOW)
-            self.led_state = False
+    def turn_on_led(self, color: str):
+        """打开指定颜色的 LED"""
+        if not self.gpio_initialized:
+            return
+        if color in self.led_states and not self.led_states[color]:
+            pin = self._get_pin(color)
+            self.GPIO.output(pin, self.GPIO.HIGH)
+            self.led_states[color] = True
+    
+    def turn_off_led(self, color: str):
+        """关闭指定颜色的 LED"""
+        if not self.gpio_initialized:
+            return
+        if color in self.led_states and self.led_states[color]:
+            pin = self._get_pin(color)
+            self.GPIO.output(pin, self.GPIO.LOW)
+            self.led_states[color] = False
+    
+    def set_led_state(self, red: bool = False, blue: bool = False, green: bool = False):
+        """
+        一次性设置所有LED状态
+        Args:
+            red: 红灯状态（环境异常）
+            blue: 蓝灯状态（危险区域有人）
+            green: 绿灯状态（正常）
+        """
+        if not self.gpio_initialized:
+            return
+        
+        # 红灯
+        if red and not self.led_states["red"]:
+            self.GPIO.output(self.led_red_pin, self.GPIO.HIGH)
+            self.led_states["red"] = True
+        elif not red and self.led_states["red"]:
+            self.GPIO.output(self.led_red_pin, self.GPIO.LOW)
+            self.led_states["red"] = False
+        
+        # 蓝灯
+        if blue and not self.led_states["blue"]:
+            self.GPIO.output(self.led_blue_pin, self.GPIO.HIGH)
+            self.led_states["blue"] = True
+        elif not blue and self.led_states["blue"]:
+            self.GPIO.output(self.led_blue_pin, self.GPIO.LOW)
+            self.led_states["blue"] = False
+        
+        # 绿灯
+        if green and not self.led_states["green"]:
+            self.GPIO.output(self.led_green_pin, self.GPIO.HIGH)
+            self.led_states["green"] = True
+        elif not green and self.led_states["green"]:
+            self.GPIO.output(self.led_green_pin, self.GPIO.LOW)
+            self.led_states["green"] = False
     
     def buzzer_beep(self, duration: float = 0.5):
-        if self.gpio_initialized:
-            self.GPIO.output(self.buzzer_pin, self.GPIO.HIGH)
-            time.sleep(duration)
-            self.GPIO.output(self.buzzer_pin, self.GPIO.LOW)
+        """蜂鸣器响（USB蜂鸣器通过系统声音）"""
+        if IS_LINUX:
+            try:
+                import subprocess
+                subprocess.run(['aplay', '-q', '/usr/share/sounds/alsa/Front_Center.wav'], 
+                             timeout=2, check=False)
+            except:
+                print('\a')
     
     def cleanup(self):
+        """清理GPIO资源"""
         if self.gpio_initialized:
+            # 关闭所有LED
+            self.GPIO.output(self.led_red_pin, self.GPIO.LOW)
+            self.GPIO.output(self.led_blue_pin, self.GPIO.LOW)
+            self.GPIO.output(self.led_green_pin, self.GPIO.LOW)
             self.GPIO.cleanup()
             print("✓ GPIO资源已清理")
 
@@ -842,8 +997,30 @@ class UnifiedDetectionSystem:
         if ENABLE_SERVER_REPORT or ENABLE_VIDEO_STREAM:
             self.server = ServerClient(SERVER_URL, DEVICE_ID)
         
-        # GPIO控制器
-        self.gpio = GPIOController()
+        # GPIO控制器（红: GPIO22, 蓝: GPIO17, 绿: GPIO27）
+        self.gpio = GPIOController(led_red_pin=22, led_blue_pin=17, led_green_pin=27)
+        
+        # DHT11 温湿度传感器（GPIO4）
+        self.dht_sensor = DHT11Sensor(pin=4)
+        
+        # 传感器数据上报间隔
+        self.last_sensor_report_time = 0
+        self.sensor_report_interval = 5.0  # 每5秒上报一次
+        
+        # ========== 环境阈值设置 ==========
+        self.temp_max = 35.0      # 温度上限 (°C)
+        self.temp_min = 10.0      # 温度下限 (°C)
+        self.humidity_max = 80.0  # 湿度上限 (%)
+        self.humidity_min = 20.0  # 湿度下限 (%)
+        self.pressure_max = 110.0 # 压力上限 (kPa) - 模拟值
+        self.pressure_min = 90.0  # 压力下限 (kPa) - 模拟值
+        
+        # 环境状态
+        self.env_abnormal = False  # 环境是否异常
+        self.danger_zone_occupied = False  # 危险区域是否有人
+        
+        # 模拟压力值（因为没有压力传感器）
+        self.simulated_pressure = 101.3  # 标准大气压
         
         # 视频流控制
         self.last_stream_time = 0
@@ -932,12 +1109,8 @@ class UnifiedDetectionSystem:
                 self.gpio.buzzer_beep(0.5)
         threading.Thread(target=_alarm, daemon=True).start()
         
-        # LED报警（红灯闪烁）
-        def _led():
-            self.gpio.turn_on_led()
-            time.sleep(3.0)
-            self.gpio.turn_off_led()
-        threading.Thread(target=_led, daemon=True).start()
+        # 更新LED状态（蓝灯亮表示危险区域有人）
+        self._update_led_status()
         
         # 上报到服务器
         if self.server:
@@ -959,10 +1132,13 @@ class UnifiedDetectionSystem:
         # 播放提示音（离开危险区 - 低频提示）
         def _notify():
             if IS_WINDOWS:
-                winsound.Beep(500, 200)  # 低频提示音
+                winsound.Beep(500, 200)
             elif IS_LINUX:
                 self.gpio.buzzer_beep(0.2)
         threading.Thread(target=_notify, daemon=True).start()
+        
+        # 更新LED状态（如果危险区域没人了，蓝灯灭）
+        self._update_led_status()
         
         # 上报到服务器
         if self.server:
@@ -995,6 +1171,139 @@ class UnifiedDetectionSystem:
             if self.server:
                 new_mode = self.server.get_detection_mode()
                 self.set_mode(new_mode)
+    
+    def _check_env_abnormal(self, temperature: float, humidity: float, pressure: float) -> bool:
+        """
+        检查环境是否异常
+        Returns:
+            True: 环境异常（任一指标超标）
+            False: 环境正常
+        """
+        abnormal = False
+        reasons = []
+        
+        # 检查温度
+        if temperature < self.temp_min:
+            abnormal = True
+            reasons.append(f"温度过低({temperature:.1f}°C < {self.temp_min}°C)")
+        elif temperature > self.temp_max:
+            abnormal = True
+            reasons.append(f"温度过高({temperature:.1f}°C > {self.temp_max}°C)")
+        
+        # 检查湿度
+        if humidity < self.humidity_min:
+            abnormal = True
+            reasons.append(f"湿度过低({humidity:.1f}% < {self.humidity_min}%)")
+        elif humidity > self.humidity_max:
+            abnormal = True
+            reasons.append(f"湿度过高({humidity:.1f}% > {self.humidity_max}%)")
+        
+        # 检查压力
+        if pressure < self.pressure_min:
+            abnormal = True
+            reasons.append(f"压力过低({pressure:.1f}kPa < {self.pressure_min}kPa)")
+        elif pressure > self.pressure_max:
+            abnormal = True
+            reasons.append(f"压力过高({pressure:.1f}kPa > {self.pressure_max}kPa)")
+        
+        if abnormal and reasons:
+            print(f"⚠️ 环境异常: {', '.join(reasons)}")
+        
+        return abnormal
+    
+    def _update_led_status(self):
+        """
+        根据当前状态更新LED灯
+        
+        逻辑：
+        - 红灯: 环境异常（温度/湿度/压力超标）
+        - 蓝灯: 危险区域有人
+        - 绿灯: 一切正常（环境正常 且 危险区域无人）
+        """
+        # 检查危险区域是否有人
+        if self.zone_detector:
+            self.danger_zone_occupied = self.zone_detector.statistics.current_in_danger > 0
+        
+        # 计算LED状态
+        red_on = self.env_abnormal
+        blue_on = self.danger_zone_occupied
+        green_on = (not self.env_abnormal) and (not self.danger_zone_occupied)
+        
+        # 设置LED
+        self.gpio.set_led_state(red=red_on, blue=blue_on, green=green_on)
+    
+    def _report_sensor_data(self):
+        """上报温湿度传感器数据并检查环境状态"""
+        current_time = time.time()
+        if current_time - self.last_sensor_report_time < self.sensor_report_interval:
+            return
+        
+        self.last_sensor_report_time = current_time
+        
+        # 读取温湿度
+        temperature, humidity = self.dht_sensor.read()
+        
+        # 生成模拟压力值（基于温度微小波动）
+        import random
+        self.simulated_pressure = 101.3 + random.uniform(-2, 2)
+        pressure = self.simulated_pressure
+        
+        if temperature is not None and humidity is not None:
+            print(f"🌡️ 温度: {temperature:.1f}°C | 💧 湿度: {humidity:.1f}% | 📊 压力: {pressure:.1f}kPa")
+            
+            # 检查环境是否异常
+            old_env_abnormal = self.env_abnormal
+            self.env_abnormal = self._check_env_abnormal(temperature, humidity, pressure)
+            
+            # 如果环境状态变化，更新LED
+            if old_env_abnormal != self.env_abnormal:
+                if self.env_abnormal:
+                    print("🔴 环境异常，红灯亮起")
+                    self.gpio.buzzer_beep(0.3)  # 短促警报
+                else:
+                    print("🟢 环境恢复正常")
+                self._update_led_status()
+            
+            # 上报到服务器
+            if self.server:
+                def _report():
+                    try:
+                        # 上报温度
+                        requests.post(
+                            f"{self.server.server_url}/api/sensor",
+                            json={
+                                "device_id": DEVICE_ID,
+                                "sensor_type": "temperature",
+                                "value": temperature,
+                                "unit": "°C"
+                            },
+                            timeout=2
+                        )
+                        # 上报湿度
+                        requests.post(
+                            f"{self.server.server_url}/api/sensor",
+                            json={
+                                "device_id": DEVICE_ID,
+                                "sensor_type": "humidity",
+                                "value": humidity,
+                                "unit": "%"
+                            },
+                            timeout=2
+                        )
+                        # 上报压力（模拟值）
+                        requests.post(
+                            f"{self.server.server_url}/api/sensor",
+                            json={
+                                "device_id": DEVICE_ID,
+                                "sensor_type": "pressure",
+                                "value": pressure,
+                                "unit": "kPa"
+                            },
+                            timeout=2
+                        )
+                    except Exception:
+                        pass
+                threading.Thread(target=_report, daemon=True).start()
     
     def _stream_frame(self, frame: np.ndarray, detection_info: dict):
         """推送视频帧"""
@@ -1254,6 +1563,10 @@ class UnifiedDetectionSystem:
         self._detection_thread.start()
         print("✓ 异步检测模式已启用（画面流畅，检测独立运行）")
         
+        # 启动时初始化LED状态（绿灯亮表示系统正常）
+        self.gpio.set_led_state(red=False, blue=False, green=True)
+        print("✓ LED状态已初始化（绿灯亮 = 系统正常）")
+        
         fps_start_time = time.time()
         fps_frame_count = 0
         fps = 0
@@ -1279,6 +1592,9 @@ class UnifiedDetectionSystem:
                 
                 # 检查服务器模式（低频率）
                 self._check_mode_from_server()
+                
+                # 上报温湿度传感器数据（每5秒一次）
+                self._report_sensor_data()
                 
                 # 在原始帧上绘制检测结果叠加层（不阻塞）
                 display_frame = self._draw_overlay_on_frame(frame)
@@ -1350,6 +1666,9 @@ class UnifiedDetectionSystem:
                 self.cap.release()
             if not headless:
                 cv2.destroyAllWindows()
+            
+            # 清理传感器和GPIO
+            self.dht_sensor.cleanup()
             self.gpio.cleanup()
             print("✓ 程序已安全退出")
             self._print_statistics()

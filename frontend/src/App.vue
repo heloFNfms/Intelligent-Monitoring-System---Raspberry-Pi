@@ -171,12 +171,27 @@
           <ConveyorBelt ref="conveyorRef" />
         </div>
 
-        <!-- 温度曲线 -->
+        <!-- 温度/湿度曲线（可切换） -->
         <div class="card chart-card">
-          <h3>温度实时曲线</h3>
+          <h3>
+            {{ chartType === 'temperature' ? '温度实时曲线' : '湿度实时曲线' }}
+            <div class="chart-switch">
+              <el-button-group size="small">
+                <el-button :type="chartType === 'temperature' ? 'primary' : 'default'" 
+                           @click="switchChartType('temperature')">🌡️ 温度</el-button>
+                <el-button :type="chartType === 'humidity' ? 'primary' : 'default'" 
+                           @click="switchChartType('humidity')">💧 湿度</el-button>
+              </el-button-group>
+            </div>
+          </h3>
           <div ref="tempChartRef" class="chart-container"></div>
-          <div class="current-value" :class="{ warning: currentTemp >= 80, danger: currentTemp >= 95 }">
+          <div v-if="chartType === 'temperature'" class="current-value" 
+               :class="{ warning: currentTemp >= 80, danger: currentTemp >= 95 }">
             当前温度: <strong>{{ currentTemp?.toFixed(1) || '--' }}°C</strong>
+          </div>
+          <div v-else class="current-value" 
+               :class="{ warning: currentHumidity >= 70, danger: currentHumidity >= 85 }">
+            当前湿度: <strong>{{ currentHumidity?.toFixed(1) || '--' }}%</strong>
           </div>
         </div>
 
@@ -385,6 +400,10 @@ const currentPressure = ref(null)
 const currentHumidity = ref(null)
 const tempData = ref([])
 const pressureData = ref([])
+const humidityData = ref([])  // 湿度历史数据
+
+// 图表类型切换（温度/湿度）
+const chartType = ref('temperature')  // 'temperature' 或 'humidity'
 
 // 检测数据
 const personCount = ref(0)
@@ -573,6 +592,78 @@ const updateChart = (chart, dataArray, newValue, maxPoints = 30) => {
     xAxis: { data: dataArray.map(d => d.time) },
     series: [{ data: dataArray.map(d => d.value) }]
   })
+}
+
+// 只添加数据点，不更新图表
+const addDataPoint = (dataArray, newValue, maxPoints = 30) => {
+  const time = new Date().toLocaleTimeString('zh-CN')
+  dataArray.push({ time, value: newValue })
+  if (dataArray.length > maxPoints) dataArray.shift()
+}
+
+// 切换图表类型（温度/湿度）
+const switchChartType = (type) => {
+  chartType.value = type
+  
+  // 重新配置图表
+  if (type === 'temperature') {
+    tempChart.setOption({
+      yAxis: { 
+        name: '°C', 
+        min: 0, 
+        max: 120 
+      },
+      series: [{
+        data: tempData.value.map(d => d.value),
+        areaStyle: { 
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: 'rgba(64, 158, 255, 0.35)' },
+            { offset: 1, color: 'rgba(64, 158, 255, 0.05)' }
+          ])
+        },
+        lineStyle: { color: '#409eff' },
+        itemStyle: { color: '#409eff', borderColor: '#0d2b45', borderWidth: 2 }
+      }],
+      visualMap: {
+        show: false,
+        pieces: [
+          { lte: 80, color: '#3a91c7' },
+          { gt: 80, lte: 95, color: '#d4915e' },
+          { gt: 95, color: '#c75050' }
+        ]
+      },
+      xAxis: { data: tempData.value.map(d => d.time) }
+    })
+  } else {
+    // 湿度图表配置
+    tempChart.setOption({
+      yAxis: { 
+        name: '%', 
+        min: 0, 
+        max: 100 
+      },
+      series: [{
+        data: humidityData.value.map(d => d.value),
+        areaStyle: { 
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: 'rgba(103, 194, 58, 0.35)' },
+            { offset: 1, color: 'rgba(103, 194, 58, 0.05)' }
+          ])
+        },
+        lineStyle: { color: '#67c23a' },
+        itemStyle: { color: '#67c23a', borderColor: '#0d2b45', borderWidth: 2 }
+      }],
+      visualMap: {
+        show: false,
+        pieces: [
+          { lte: 70, color: '#67c23a' },
+          { gt: 70, lte: 85, color: '#d4915e' },
+          { gt: 85, color: '#c75050' }
+        ]
+      },
+      xAxis: { data: humidityData.value.map(d => d.time) }
+    })
+  }
 }
 
 
@@ -897,12 +988,25 @@ const setupWebSocket = async () => {
     wsClient.on('sensor_update', (data) => {
       if (data.sensor_type === 'temperature') {
         currentTemp.value = data.value
-        updateChart(tempChart, tempData.value, data.value)
+        // 只有当前显示温度图表时才更新
+        if (chartType.value === 'temperature') {
+          updateChart(tempChart, tempData.value, data.value)
+        } else {
+          // 仍然保存数据，但不更新图表
+          addDataPoint(tempData.value, data.value)
+        }
       } else if (data.sensor_type === 'pressure') {
         currentPressure.value = data.value
         updateChart(pressureChart, pressureData.value, data.value)
       } else if (data.sensor_type === 'humidity') {
         currentHumidity.value = data.value
+        // 只有当前显示湿度图表时才更新
+        if (chartType.value === 'humidity') {
+          updateChart(tempChart, humidityData.value, data.value)
+        } else {
+          // 仍然保存数据，但不更新图表
+          addDataPoint(humidityData.value, data.value)
+        }
       }
     })
     
@@ -1508,6 +1612,22 @@ onUnmounted(() => {
   flex: 1;
   display: flex;
   flex-direction: column;
+}
+
+.chart-card h3 {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.chart-switch {
+  display: flex;
+  gap: 4px;
+}
+
+.chart-switch .el-button {
+  padding: 4px 10px;
+  font-size: 12px;
 }
 
 .chart-container {
