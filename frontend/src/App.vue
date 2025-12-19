@@ -27,7 +27,7 @@
     </header>
 
     <main class="main-content">
-      <!-- 左侧面板 -->
+      <!-- 左侧面板 - 核心控制 -->
       <section class="left-panel">
         <!-- 生产状态卡片 -->
         <div class="card status-card">
@@ -116,17 +116,27 @@
           <div class="schedule-rules">
             <div class="rule-item" :class="{ disabled: !scheduleRules.tempPause }">
               <el-checkbox v-model="scheduleRules.tempPause" @change="updateScheduleRule('temp_danger_pause', $event)">
-                高温自动暂停 (>95°C)
+                🌡️ 温度超限自动停止 (>{{ thresholds.tempMax }}°C)
               </el-checkbox>
             </div>
-            <div class="rule-item" :class="{ disabled: !scheduleRules.tempRecover }">
-              <el-checkbox v-model="scheduleRules.tempRecover" @change="updateScheduleRule('temp_recover_start', $event)">
-                温度恢复自动启动 (<80°C)
+            <div class="rule-item" :class="{ disabled: !scheduleRules.humidityPause }">
+              <el-checkbox v-model="scheduleRules.humidityPause" @change="updateScheduleRule('humidity_danger_pause', $event)">
+                💧 湿度超限自动停止 (>{{ thresholds.humidityMax }}%)
+              </el-checkbox>
+            </div>
+            <div class="rule-item" :class="{ disabled: !scheduleRules.pressurePause }">
+              <el-checkbox v-model="scheduleRules.pressurePause" @change="updateScheduleRule('pressure_danger_pause', $event)">
+                📊 压力超限自动停止 (>{{ thresholds.pressureMax }}kPa)
               </el-checkbox>
             </div>
             <div class="rule-item" :class="{ disabled: !scheduleRules.productionStop }">
               <el-checkbox v-model="scheduleRules.productionStop" @change="updateScheduleRule('production_complete', $event)">
-                产量达标自动停止
+                🎯 产量达标自动停止
+              </el-checkbox>
+            </div>
+            <div class="rule-item" :class="{ disabled: !scheduleRules.allNormalStart }">
+              <el-checkbox v-model="scheduleRules.allNormalStart" @change="updateScheduleRule('all_normal_start', $event)">
+                ✅ 全部正常自动启动
               </el-checkbox>
             </div>
           </div>
@@ -171,29 +181,9 @@
             </div>
           </div>
         </div>
-
-        <!-- 历史数据查询 -->
-        <div class="card history-card">
-          <h3>
-            历史数据
-            <el-select v-model="historyType" size="small" style="width: 100px; margin-left: 10px;">
-              <el-option label="温度" value="temperature" />
-              <el-option label="湿度" value="humidity" />
-              <el-option label="压力" value="pressure" />
-            </el-select>
-          </h3>
-          <div class="history-range">
-            <el-radio-group v-model="historyRange" size="small" @change="loadHistoryData">
-              <el-radio-button label="1h">1小时</el-radio-button>
-              <el-radio-button label="6h">6小时</el-radio-button>
-              <el-radio-button label="24h">24小时</el-radio-button>
-            </el-radio-group>
-          </div>
-          <div ref="historyChartRef" class="history-chart-container"></div>
-        </div>
       </section>
 
-      <!-- 中间面板 - 传送带 + 图表 -->
+      <!-- 中间面板 - 传送带 + 图表 + 历史数据 -->
       <section class="center-panel">
         <!-- 传送带可视化 -->
         <div class="card conveyor-card">
@@ -206,24 +196,47 @@
           <ConveyorBelt ref="conveyorRef" />
         </div>
 
-        <!-- 环境监测曲线（温度/湿度/压力可切换） -->
-        <div class="card chart-card">
-          <h3>
-            {{ chartTypeLabels[chartType] }}
-            <div class="chart-switch">
-              <el-button-group size="small">
-                <el-button :type="chartType === 'temperature' ? 'primary' : 'default'" 
-                           @click="switchChartType('temperature')">🌡️ 温度</el-button>
-                <el-button :type="chartType === 'humidity' ? 'primary' : 'default'" 
-                           @click="switchChartType('humidity')">💧 湿度</el-button>
-                <el-button :type="chartType === 'pressure' ? 'primary' : 'default'" 
-                           @click="switchChartType('pressure')">📊 压力</el-button>
-              </el-button-group>
+        <!-- 图表区域 - 实时曲线和历史数据并排 -->
+        <div class="charts-row">
+          <!-- 环境监测曲线（温度/湿度/压力可切换） -->
+          <div class="card chart-card">
+            <h3>
+              {{ chartTypeLabels[chartType] }}
+              <div class="chart-switch">
+                <el-button-group size="small">
+                  <el-button :type="chartType === 'temperature' ? 'primary' : 'default'" 
+                             @click="switchChartType('temperature')">🌡️ 温度</el-button>
+                  <el-button :type="chartType === 'humidity' ? 'primary' : 'default'" 
+                             @click="switchChartType('humidity')">💧 湿度</el-button>
+                  <el-button :type="chartType === 'pressure' ? 'primary' : 'default'" 
+                             @click="switchChartType('pressure')">📊 压力</el-button>
+                </el-button-group>
+              </div>
+            </h3>
+            <div ref="mainChartRef" class="chart-container"></div>
+            <div class="current-value" :class="currentValueClass">
+              {{ currentValueLabel }}: <strong>{{ currentValueDisplay }}</strong>
             </div>
-          </h3>
-          <div ref="mainChartRef" class="chart-container"></div>
-          <div class="current-value" :class="currentValueClass">
-            {{ currentValueLabel }}: <strong>{{ currentValueDisplay }}</strong>
+          </div>
+
+          <!-- 历史数据查询 -->
+          <div class="card history-card">
+            <h3>
+              历史数据
+              <el-select v-model="historyType" size="small" style="width: 90px; margin-left: 10px;">
+                <el-option label="温度" value="temperature" />
+                <el-option label="湿度" value="humidity" />
+                <el-option label="压力" value="pressure" />
+              </el-select>
+            </h3>
+            <div class="history-range">
+              <el-radio-group v-model="historyRange" size="small" @change="loadHistoryData">
+                <el-radio-button label="1h">1小时</el-radio-button>
+                <el-radio-button label="6h">6小时</el-radio-button>
+                <el-radio-button label="24h">24小时</el-radio-button>
+              </el-radio-group>
+            </div>
+            <div ref="historyChartRef" class="history-chart-container"></div>
           </div>
         </div>
       </section>
@@ -433,8 +446,10 @@ const planProgress = ref({
 const autoScheduleEnabled = ref(true)
 const scheduleRules = ref({
   tempPause: true,
-  tempRecover: true,
-  productionStop: true
+  humidityPause: true,
+  pressurePause: true,
+  productionStop: true,
+  allNormalStart: true
 })
 const lastScheduleAction = ref('')
 
@@ -990,12 +1005,15 @@ const loadPlanProgress = async () => {
 // 切换自动调度
 const toggleAutoSchedule = async (enabled) => {
   // 批量更新所有规则
-  for (const ruleId of ['temp_danger_pause', 'temp_recover_start', 'production_complete']) {
+  const ruleIds = ['temp_danger_pause', 'humidity_danger_pause', 'pressure_danger_pause', 'production_complete', 'all_normal_start']
+  for (const ruleId of ruleIds) {
     await updateScheduleRule(ruleId, enabled)
   }
   scheduleRules.value.tempPause = enabled
-  scheduleRules.value.tempRecover = enabled
+  scheduleRules.value.humidityPause = enabled
+  scheduleRules.value.pressurePause = enabled
   scheduleRules.value.productionStop = enabled
+  scheduleRules.value.allNormalStart = enabled
 }
 
 // 更新调度规则
@@ -1019,8 +1037,10 @@ const loadScheduleRules = async () => {
       const rules = await response.json()
       for (const rule of rules) {
         if (rule.id === 'temp_danger_pause') scheduleRules.value.tempPause = rule.enabled
-        if (rule.id === 'temp_recover_start') scheduleRules.value.tempRecover = rule.enabled
+        if (rule.id === 'humidity_danger_pause') scheduleRules.value.humidityPause = rule.enabled
+        if (rule.id === 'pressure_danger_pause') scheduleRules.value.pressurePause = rule.enabled
         if (rule.id === 'production_complete') scheduleRules.value.productionStop = rule.enabled
+        if (rule.id === 'all_normal_start') scheduleRules.value.allNormalStart = rule.enabled
       }
     }
   } catch (e) {
@@ -1613,10 +1633,11 @@ const syncProductionCount = () => {
   position: relative;
   z-index: 1;
   display: grid;
-  grid-template-columns: 300px 1fr 280px;
-  gap: 20px;
-  padding: 20px;
+  grid-template-columns: 280px 1fr 260px;
+  gap: 16px;
+  padding: 16px;
   height: calc(100vh - 70px);
+  overflow: hidden;
 }
 
 /* ========================================
@@ -1627,7 +1648,7 @@ const syncProductionCount = () => {
   backdrop-filter: blur(var(--glass-blur));
   -webkit-backdrop-filter: blur(var(--glass-blur));
   border-radius: 8px;
-  padding: 20px;
+  padding: 14px;
   border: 1px solid var(--border-color);
   box-shadow: 
     0 4px 24px rgba(0, 0, 0, 0.25),
@@ -1640,15 +1661,15 @@ const syncProductionCount = () => {
 }
 
 .card h3 {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
   color: var(--text-secondary);
   text-transform: uppercase;
-  letter-spacing: 1.5px;
+  letter-spacing: 1.2px;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 
 /* ========================================
@@ -1657,23 +1678,39 @@ const syncProductionCount = () => {
 .left-panel {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 12px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.left-panel::-webkit-scrollbar {
+  width: 4px;
+}
+
+.left-panel::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 2px;
+}
+
+.left-panel::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 2px;
 }
 
 /* 生产状态卡片 */
 .status-card .status-display {
   text-align: center;
-  margin-bottom: 20px;
+  margin-bottom: 12px;
 }
 
 .status-indicator {
   display: inline-block;
-  padding: 15px 35px;
+  padding: 10px 25px;
   border-radius: 6px;
-  font-size: 24px;
+  font-size: 20px;
   font-weight: 700;
-  margin-bottom: 12px;
-  letter-spacing: 3px;
+  margin-bottom: 8px;
+  letter-spacing: 2px;
   font-family: var(--font-mono);
   text-transform: uppercase;
 }
@@ -1708,58 +1745,58 @@ const syncProductionCount = () => {
 
 .production-count {
   text-align: center;
-  padding: 18px;
+  padding: 12px;
   background: rgba(58, 145, 199, 0.08);
   border-radius: 6px;
   border: 1px solid rgba(58, 145, 199, 0.15);
 }
 
 .count-value {
-  font-size: 42px;
+  font-size: 32px;
   font-weight: 600;
   color: var(--primary-color);
-  margin: 0 6px;
+  margin: 0 4px;
   font-family: var(--font-mono);
   letter-spacing: -1px;
 }
 
 .count-label, .count-unit {
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 /* 控制面板 */
 .control-buttons {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 16px;
+  gap: 6px;
+  margin-bottom: 12px;
 }
 
 .control-buttons .el-button {
-  flex: 1 1 80px;
-  min-width: 70px;
+  flex: 1 1 70px;
+  min-width: 60px;
   font-weight: 500;
   letter-spacing: 0.5px;
-  padding: 8px 12px;
-  font-size: 13px;
+  padding: 6px 10px;
+  font-size: 12px;
 }
 
 .mode-switch {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .speed-control {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-top: 16px;
+  gap: 10px;
+  margin-top: 12px;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .speed-control .el-slider {
@@ -1841,7 +1878,8 @@ const syncProductionCount = () => {
 .center-panel {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 12px;
+  overflow: hidden;
 }
 
 /* 传送带卡片 */
@@ -1871,16 +1909,27 @@ const syncProductionCount = () => {
   color: var(--success-color);
 }
 
-.chart-card {
+/* 图表区域 - 并排布局 */
+.charts-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
   flex: 1;
+  min-height: 0;
+}
+
+.chart-card {
   display: flex;
   flex-direction: column;
+  min-height: 0;
 }
 
 .chart-card h3 {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .chart-switch {
@@ -1889,27 +1938,27 @@ const syncProductionCount = () => {
 }
 
 .chart-switch .el-button {
-  padding: 4px 10px;
-  font-size: 12px;
+  padding: 4px 8px;
+  font-size: 11px;
 }
 
 .chart-container {
   flex: 1;
-  min-height: 200px;
+  min-height: 180px;
 }
 
 .current-value {
   text-align: center;
-  padding: 12px;
-  font-size: 14px;
+  padding: 8px;
+  font-size: 13px;
   color: var(--success-color);
   font-family: var(--font-mono);
   border-top: 1px solid var(--border-color);
-  margin-top: 12px;
+  margin-top: 8px;
 }
 
 .current-value strong {
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 600;
 }
 
@@ -1933,7 +1982,23 @@ const syncProductionCount = () => {
 .right-panel {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 12px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.right-panel::-webkit-scrollbar {
+  width: 4px;
+}
+
+.right-panel::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 2px;
+}
+
+.right-panel::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 2px;
 }
 
 /* 视频流状态 */
@@ -1957,11 +2022,12 @@ const syncProductionCount = () => {
   background: var(--bg-primary);
   border-radius: 6px;
   overflow: hidden;
-  margin-bottom: 16px;
+  margin-bottom: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
   border: 1px solid var(--border-color);
+  max-height: 180px;
 }
 
 .video-frame {
@@ -1990,7 +2056,7 @@ const syncProductionCount = () => {
 /* 检测状态 */
 .detection-status {
   text-align: center;
-  padding: 16px;
+  padding: 10px;
   border-radius: 6px;
   background: rgba(74, 157, 110, 0.08);
   border: 1px solid rgba(74, 157, 110, 0.2);
@@ -2009,20 +2075,20 @@ const syncProductionCount = () => {
 }
 
 .person-count {
-  font-size: 14px;
-  margin-bottom: 8px;
+  font-size: 12px;
+  margin-bottom: 6px;
   color: var(--text-secondary);
 }
 
 .person-count strong {
-  font-size: 28px;
+  font-size: 22px;
   color: var(--primary-color);
   font-family: var(--font-mono);
   font-weight: 600;
 }
 
 .zone-status {
-  font-size: 14px;
+  font-size: 12px;
   color: var(--success-color);
 }
 
@@ -2033,8 +2099,8 @@ const syncProductionCount = () => {
 
 /* 危险区域统计 */
 .zone-statistics {
-  margin-top: 16px;
-  padding-top: 16px;
+  margin-top: 10px;
+  padding-top: 10px;
   border-top: 1px solid rgba(255, 255, 255, 0.1);
 }
 
@@ -2042,8 +2108,8 @@ const syncProductionCount = () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 8px;
+  gap: 6px;
+  padding: 6px;
   border-radius: 4px;
   background: rgba(255, 255, 255, 0.03);
 }
@@ -2051,20 +2117,20 @@ const syncProductionCount = () => {
 .zone-stat-item.danger-stat {
   background: rgba(199, 80, 80, 0.1);
   border: 1px solid rgba(199, 80, 80, 0.2);
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 
 .zone-stat-item .stat-icon {
-  font-size: 18px;
+  font-size: 14px;
 }
 
 .zone-stat-item .stat-label {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-secondary);
 }
 
 .zone-stat-item .stat-value {
-  font-size: 20px;
+  font-size: 16px;
   font-weight: 600;
   font-family: var(--font-mono);
   color: var(--danger-color);
@@ -2074,16 +2140,16 @@ const syncProductionCount = () => {
 .zone-stat-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 8px;
+  gap: 6px;
 }
 
 .zone-stat-row .zone-stat-item {
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
 .zone-stat-row .stat-value {
-  font-size: 18px;
+  font-size: 14px;
 }
 
 .zone-stat-row .stat-value.enter {
@@ -2097,30 +2163,30 @@ const syncProductionCount = () => {
 /* 危险区域操作按钮 */
 .zone-actions {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   justify-content: center;
-  margin-top: 12px;
-  padding-top: 12px;
+  margin-top: 8px;
+  padding-top: 8px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .zone-actions .el-button {
-  font-size: 11px;
-  padding: 6px 12px;
+  font-size: 10px;
+  padding: 4px 8px;
 }
 
 /* 最后事件时间 */
 .zone-last-time {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin-top: 10px;
-  padding-top: 10px;
+  gap: 2px;
+  margin-top: 6px;
+  padding-top: 6px;
   border-top: 1px dashed rgba(255, 255, 255, 0.08);
 }
 
 .zone-last-time small {
-  font-size: 10px;
+  font-size: 9px;
   color: var(--text-muted);
   text-align: center;
 }
@@ -2129,12 +2195,12 @@ const syncProductionCount = () => {
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
+  gap: 8px;
 }
 
 .stat-item {
   text-align: center;
-  padding: 16px 8px;
+  padding: 10px 6px;
   background: rgba(255, 255, 255, 0.03);
   border-radius: 6px;
   border: 1px solid var(--border-color);
@@ -2145,25 +2211,25 @@ const syncProductionCount = () => {
   border-color: var(--border-glow);
 }
 
-.stat-value {
+.stats-card .stat-value {
   display: block;
-  font-size: 26px;
+  font-size: 20px;
   font-weight: 600;
   color: var(--primary-color);
   font-family: var(--font-mono);
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 
-.stat-value.danger {
+.stats-card .stat-value.danger {
   color: var(--danger-color);
 }
 
-.stat-value.warning {
+.stats-card .stat-value.warning {
   color: var(--warning-color);
 }
 
-.stat-label {
-  font-size: 11px;
+.stats-card .stat-label {
+  font-size: 10px;
   color: var(--text-muted);
   letter-spacing: 0.5px;
 }
@@ -2177,26 +2243,26 @@ const syncProductionCount = () => {
 
 .led-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 16px;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
 }
 
 .led-item {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
 }
 
 .led-item span {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--text-muted);
-  letter-spacing: 0.5px;
+  letter-spacing: 0.3px;
 }
 
 .led-light {
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.15);
@@ -2244,8 +2310,8 @@ const syncProductionCount = () => {
 /* 设备信息 */
 .device-info p {
   color: var(--text-secondary);
-  margin-bottom: 10px;
-  font-size: 13px;
+  margin-bottom: 6px;
+  font-size: 11px;
   font-family: var(--font-mono);
 }
 
@@ -2482,15 +2548,16 @@ const syncProductionCount = () => {
 .schedule-card .schedule-rules {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .rule-item {
-  padding: 8px 12px;
+  padding: 6px 10px;
   background: rgba(255, 255, 255, 0.03);
   border-radius: 4px;
   border: 1px solid var(--border-color);
   transition: all 0.2s ease;
+  font-size: 12px;
 }
 
 .rule-item:hover {
@@ -2512,22 +2579,22 @@ const syncProductionCount = () => {
 }
 
 .schedule-log {
-  margin-top: 12px;
-  padding: 10px 12px;
+  margin-top: 8px;
+  padding: 8px 10px;
   background: rgba(74, 157, 110, 0.1);
   border-radius: 4px;
   border-left: 3px solid var(--success-color);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .schedule-log .log-icon {
-  font-size: 14px;
+  font-size: 12px;
 }
 
 .schedule-log .log-text {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-secondary);
 }
 
@@ -2634,7 +2701,7 @@ const syncProductionCount = () => {
 .threshold-card .threshold-settings {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
 }
 
 .threshold-item {
@@ -2642,41 +2709,56 @@ const syncProductionCount = () => {
   justify-content: space-between;
   align-items: center;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
 }
 
 .threshold-label {
-  font-size: 13px;
+  font-size: 12px;
   color: rgba(255, 255, 255, 0.8);
-  min-width: 120px;
+  min-width: 100px;
 }
 
 .threshold-inputs {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .threshold-separator {
   color: rgba(255, 255, 255, 0.5);
   font-weight: bold;
+  font-size: 12px;
 }
 
 .threshold-inputs .el-input-number {
-  width: 80px;
+  width: 70px;
 }
 
 /* ========================================
    历史数据样式
    ======================================== */
+.history-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.history-card h3 {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .history-card .history-range {
-  margin: 10px 0;
+  margin: 8px 0;
   text-align: center;
 }
 
 .history-chart-container {
-  height: 200px;
-  margin-top: 10px;
+  flex: 1;
+  min-height: 180px;
 }
 
 .history-card .el-select {
@@ -2693,25 +2775,43 @@ const syncProductionCount = () => {
   background: rgba(255, 255, 255, 0.05);
   border-color: var(--border-color);
   color: var(--text-secondary);
-  padding: 6px 12px;
+  padding: 4px 10px;
+  font-size: 12px;
 }
 
 /* ========================================
    响应式设计
    ======================================== */
+@media (max-width: 1400px) {
+  .charts-row {
+    grid-template-columns: 1fr;
+  }
+  
+  .history-chart-container {
+    min-height: 150px;
+  }
+}
+
 @media (max-width: 1200px) {
   .dashboard .main-content {
     grid-template-columns: 1fr;
     grid-template-rows: auto auto auto;
+    height: auto;
+    overflow-y: auto;
   }
   
   .left-panel, .right-panel {
     grid-column: 1;
+    overflow-y: visible;
   }
   
   .center-panel {
     grid-column: 1;
     grid-row: 2;
+  }
+  
+  .charts-row {
+    grid-template-columns: 1fr 1fr;
   }
 }
 </style>

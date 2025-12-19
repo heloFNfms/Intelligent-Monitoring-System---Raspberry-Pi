@@ -304,7 +304,9 @@ async def process_sensor_data(device_id: str, data: dict):
     # 广播到前端
     await manager.broadcast_sensor_update(device_id, sensor_type, value, unit)
     
-    # 检查是否需要报警
+    scheduler = get_scheduler()
+    
+    # 检查是否需要报警和调度
     if sensor_type == "temperature":
         if value >= settings.TEMP_DANGER_THRESHOLD:
             await manager.broadcast_alert(device_id, "temperature", 
@@ -314,8 +316,37 @@ async def process_sensor_data(device_id: str, data: dict):
                 f"温度警告: {value}°C", "warning")
         
         # 检查温度调度规则
-        scheduler = get_scheduler()
         await scheduler.check_temperature(device_id, value)
+    
+    elif sensor_type == "humidity":
+        # 获取阈值配置
+        thresholds = device_thresholds.get(device_id, {})
+        humidity_max = thresholds.get("humidityMax", 80)
+        
+        if value >= humidity_max:
+            await manager.broadcast_alert(device_id, "humidity", 
+                f"湿度过高警报: {value}%", "danger")
+        elif value >= humidity_max * 0.9:
+            await manager.broadcast_alert(device_id, "humidity", 
+                f"湿度警告: {value}%", "warning")
+        
+        # 检查湿度调度规则
+        await scheduler.check_humidity(device_id, value)
+    
+    elif sensor_type == "pressure":
+        # 获取阈值配置
+        thresholds = device_thresholds.get(device_id, {})
+        pressure_max = thresholds.get("pressureMax", 110)
+        
+        if value >= pressure_max:
+            await manager.broadcast_alert(device_id, "pressure", 
+                f"压力过高警报: {value}kPa", "danger")
+        elif value >= pressure_max * 0.95:
+            await manager.broadcast_alert(device_id, "pressure", 
+                f"压力警告: {value}kPa", "warning")
+        
+        # 检查压力调度规则
+        await scheduler.check_pressure(device_id, value)
 
 
 async def process_detection_data(device_id: str, data: dict):
@@ -678,6 +709,11 @@ device_thresholds = {}
 async def set_thresholds(device_id: str, thresholds: dict):
     """设置设备环境阈值"""
     device_thresholds[device_id] = thresholds
+    
+    # 同步更新调度器的阈值
+    scheduler = get_scheduler()
+    scheduler.update_thresholds(device_id, thresholds)
+    
     return {"message": "阈值配置已保存", "thresholds": thresholds}
 
 @app.get("/api/thresholds/{device_id}", tags=["环境监控"])
