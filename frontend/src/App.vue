@@ -1,5 +1,39 @@
 <template>
   <div class="dashboard" :class="{ 'alarm-active': alarmActive }">
+    <!-- 超炫酷背景特效层 -->
+    <div class="bg-effects">
+      <!-- 粒子系统 -->
+      <div class="particles-container">
+        <div class="particle" v-for="n in 30" :key="'p'+n" :style="getParticleBgStyle(n)"></div>
+      </div>
+      
+      <!-- 能量流动线条 -->
+      <div class="energy-lines">
+        <div class="energy-line line-1"></div>
+        <div class="energy-line line-2"></div>
+        <div class="energy-line line-3"></div>
+        <div class="energy-line line-4"></div>
+      </div>
+      
+      <!-- 光斑效果 -->
+      <div class="light-orbs">
+        <div class="orb orb-1"></div>
+        <div class="orb orb-2"></div>
+        <div class="orb orb-3"></div>
+      </div>
+      
+      <!-- 扫描线 -->
+      <div class="scan-line-bg"></div>
+      
+      <!-- 数据流背景 -->
+      <div class="data-stream">
+        <div class="stream-line" v-for="n in 5" :key="'s'+n" :style="getStreamStyle(n)"></div>
+      </div>
+      
+      <!-- 六边形网格 -->
+      <div class="hex-grid"></div>
+    </div>
+    
     <!-- 全屏报警遮罩 -->
     <div v-if="alarmActive" class="alarm-overlay" @click="dismissAlarm">
       <div class="alarm-siren">
@@ -543,6 +577,23 @@ const productBCount = ref(0)
 
 // 声音报警
 let alarmAudio = null
+
+// 背景粒子样式生成
+const getParticleBgStyle = (n) => ({
+  left: `${(n * 3.3) % 100}%`,
+  top: `${(n * 7.1) % 100}%`,
+  width: `${2 + (n % 4)}px`,
+  height: `${2 + (n % 4)}px`,
+  animationDelay: `${(n * 0.3) % 8}s`,
+  animationDuration: `${4 + (n % 4)}s`
+})
+
+// 数据流样式生成
+const getStreamStyle = (n) => ({
+  left: `${n * 20}%`,
+  animationDelay: `${n * 0.5}s`,
+  animationDuration: `${3 + n * 0.5}s`
+})
 
 // 计算属性
 const statusText = computed(() => {
@@ -1577,6 +1628,257 @@ const syncProductionCount = () => {
   background-size: 50px 50px;
   pointer-events: none;
   z-index: 0;
+  animation: gridMove 20s linear infinite;
+}
+
+@keyframes gridMove {
+  0% { background-position: 0 0; }
+  100% { background-position: 50px 50px; }
+}
+
+/* ========================================
+   超炫酷背景特效层
+   ======================================== */
+.bg-effects {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+}
+
+/* 粒子系统 */
+.particles-container {
+  position: absolute;
+  inset: 0;
+}
+
+.particles-container .particle {
+  position: absolute;
+  background: radial-gradient(circle, rgba(58, 145, 199, 0.8) 0%, transparent 70%);
+  border-radius: 50%;
+  animation: particleDrift 6s ease-in-out infinite;
+  filter: blur(1px);
+}
+
+@keyframes particleDrift {
+  0%, 100% { 
+    transform: translateY(0) translateX(0) scale(1); 
+    opacity: 0.3; 
+  }
+  25% { 
+    transform: translateY(-30px) translateX(15px) scale(1.2); 
+    opacity: 0.6; 
+  }
+  50% { 
+    transform: translateY(-10px) translateX(-10px) scale(0.8); 
+    opacity: 0.8; 
+  }
+  75% { 
+    transform: translateY(-50px) translateX(20px) scale(1.1); 
+    opacity: 0.4; 
+  }
+}
+
+/* 能量流动线条 */
+.energy-lines {
+  position: absolute;
+  inset: 0;
+}
+
+.energy-line {
+  position: absolute;
+  height: 1px;
+  background: linear-gradient(90deg, 
+    transparent 0%, 
+    rgba(58, 145, 199, 0.1) 20%,
+    rgba(58, 145, 199, 0.6) 50%, 
+    rgba(58, 145, 199, 0.1) 80%,
+    transparent 100%
+  );
+  filter: blur(0.5px);
+  animation: energyFlow 8s linear infinite;
+}
+
+.energy-line.line-1 {
+  top: 15%;
+  width: 60%;
+  left: -60%;
+  animation-delay: 0s;
+}
+
+.energy-line.line-2 {
+  top: 45%;
+  width: 80%;
+  left: -80%;
+  animation-delay: 2s;
+  background: linear-gradient(90deg, 
+    transparent 0%, 
+    rgba(45, 183, 181, 0.1) 20%,
+    rgba(45, 183, 181, 0.5) 50%, 
+    rgba(45, 183, 181, 0.1) 80%,
+    transparent 100%
+  );
+}
+
+.energy-line.line-3 {
+  top: 70%;
+  width: 50%;
+  left: -50%;
+  animation-delay: 4s;
+}
+
+.energy-line.line-4 {
+  top: 90%;
+  width: 70%;
+  left: -70%;
+  animation-delay: 6s;
+  background: linear-gradient(90deg, 
+    transparent 0%, 
+    rgba(45, 183, 181, 0.1) 20%,
+    rgba(45, 183, 181, 0.4) 50%, 
+    rgba(45, 183, 181, 0.1) 80%,
+    transparent 100%
+  );
+}
+
+@keyframes energyFlow {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(200%); }
+}
+
+/* 光斑效果 */
+.light-orbs {
+  position: absolute;
+  inset: 0;
+}
+
+.orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(60px);
+  animation: orbFloat 15s ease-in-out infinite;
+}
+
+.orb-1 {
+  top: 10%;
+  left: 15%;
+  width: 300px;
+  height: 300px;
+  background: radial-gradient(circle, rgba(58, 145, 199, 0.15) 0%, transparent 70%);
+  animation-delay: 0s;
+}
+
+.orb-2 {
+  top: 60%;
+  right: 10%;
+  width: 400px;
+  height: 400px;
+  background: radial-gradient(circle, rgba(45, 183, 181, 0.12) 0%, transparent 70%);
+  animation-delay: 5s;
+}
+
+.orb-3 {
+  bottom: 20%;
+  left: 40%;
+  width: 250px;
+  height: 250px;
+  background: radial-gradient(circle, rgba(58, 145, 199, 0.1) 0%, transparent 70%);
+  animation-delay: 10s;
+}
+
+@keyframes orbFloat {
+  0%, 100% { 
+    transform: translate(0, 0) scale(1);
+    opacity: 0.6;
+  }
+  25% { 
+    transform: translate(30px, -40px) scale(1.1);
+    opacity: 0.8;
+  }
+  50% { 
+    transform: translate(-20px, 30px) scale(0.9);
+    opacity: 0.5;
+  }
+  75% { 
+    transform: translate(40px, 20px) scale(1.05);
+    opacity: 0.7;
+  }
+}
+
+/* 扫描线 */
+.scan-line-bg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 200px;
+  background: linear-gradient(180deg, 
+    rgba(58, 145, 199, 0.08) 0%,
+    rgba(58, 145, 199, 0.02) 50%,
+    transparent 100%
+  );
+  animation: scanBg 6s ease-in-out infinite;
+}
+
+@keyframes scanBg {
+  0%, 100% { 
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  10% { opacity: 1; }
+  90% { opacity: 1; }
+  100% { 
+    transform: translateY(100vh);
+    opacity: 0;
+  }
+}
+
+/* 数据流 */
+.data-stream {
+  position: absolute;
+  inset: 0;
+}
+
+.stream-line {
+  position: absolute;
+  top: 0;
+  width: 1px;
+  height: 100%;
+  background: linear-gradient(180deg, 
+    transparent 0%,
+    transparent 40%,
+    rgba(58, 145, 199, 0.4) 50%,
+    transparent 60%,
+    transparent 100%
+  );
+  animation: streamFlow 5s linear infinite;
+}
+
+@keyframes streamFlow {
+  0% { 
+    background-position: 0 -100%;
+  }
+  100% { 
+    background-position: 0 100%;
+  }
+}
+
+/* 六边形网格 */
+.hex-grid {
+  position: absolute;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='49' viewBox='0 0 28 49'%3E%3Cg fill-rule='evenodd'%3E%3Cg fill='%233a91c7' fill-opacity='0.02'%3E%3Cpath d='M13.99 9.25l13 7.5v15l-13 7.5L1 31.75v-15l12.99-7.5zM3 17.9v12.7l10.99 6.34 11-6.35V17.9l-11-6.34L3 17.9zM0 15l12.98-7.5V0h-2v6.35L0 12.69v2.3zm0 18.5L12.98 41v8h-2v-6.85L0 35.81v-2.3zM15 0v7.5L27.99 15H28v-2.31h-.01L17 6.35V0h-2zm0 49v-8l12.99-7.5H28v2.31h-.01L17 42.15V49h-2z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+  opacity: 0.5;
+  animation: hexMove 30s linear infinite;
+}
+
+@keyframes hexMove {
+  0% { background-position: 0 0; }
+  100% { background-position: 56px 98px; }
 }
 
 /* ========================================
@@ -1627,37 +1929,119 @@ const syncProductionCount = () => {
 }
 
 /* ========================================
-   主内容区域
+   主内容区域 - 响应式布局
    ======================================== */
 .main-content {
   position: relative;
   z-index: 1;
   display: grid;
-  grid-template-columns: 280px 1fr 260px;
+  grid-template-columns: 300px 1fr 280px;
+  grid-template-rows: 1fr; /* 关键：让子元素填满可用高度 */
   gap: 16px;
   padding: 16px;
-  height: calc(100vh - 70px);
+  height: calc(100vh - 70px); /* 使用固定高度 */
   overflow: hidden;
 }
 
+/* 响应式布局 - 中等屏幕 */
+@media (max-width: 1400px) {
+  .main-content {
+    grid-template-columns: 260px 1fr 240px;
+    gap: 12px;
+    padding: 12px;
+  }
+}
+
+/* 响应式布局 - 小屏幕 */
+@media (max-width: 1200px) {
+  .main-content {
+    grid-template-columns: 240px 1fr 220px;
+    gap: 10px;
+    padding: 10px;
+  }
+}
+
+/* 响应式布局 - 平板 */
+@media (max-width: 1024px) {
+  .main-content {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto;
+    height: auto;
+    overflow-y: auto;
+    padding-bottom: 40px;
+  }
+}
+
 /* ========================================
-   卡片组件 - 毛玻璃效果
+   卡片组件 - 超炫酷毛玻璃效果
    ======================================== */
 .card {
   background: var(--glass-bg);
   backdrop-filter: blur(var(--glass-blur));
   -webkit-backdrop-filter: blur(var(--glass-blur));
-  border-radius: 8px;
-  padding: 14px;
+  border-radius: 10px;
+  padding: 16px;
   border: 1px solid var(--border-color);
   box-shadow: 
-    0 4px 24px rgba(0, 0, 0, 0.25),
-    inset 0 1px 0 rgba(255, 255, 255, 0.03);
-  transition: border-color var(--transition-normal) ease;
+    0 4px 24px rgba(0, 0, 0, 0.3),
+    0 0 40px rgba(58, 145, 199, 0.03),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  transition: all var(--transition-normal) ease;
+  position: relative;
+  overflow: hidden;
+  /* 确保卡片内容不会被截断 */
+  min-height: fit-content;
+  flex-shrink: 0;
+}
+
+/* 卡片光泽扫过效果 */
+.card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, 
+    transparent 0%, 
+    rgba(255, 255, 255, 0.02) 50%, 
+    transparent 100%
+  );
+  transition: left 0.5s ease;
+  pointer-events: none;
+}
+
+.card:hover::before {
+  left: 100%;
+}
+
+/* 卡片角落装饰 */
+.card::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 30px;
+  height: 30px;
+  border-top: 2px solid var(--border-color);
+  border-right: 2px solid var(--border-color);
+  border-radius: 0 10px 0 0;
+  transition: all var(--transition-normal) ease;
+  pointer-events: none;
 }
 
 .card:hover {
   border-color: var(--border-glow);
+  transform: translateY(-2px);
+  box-shadow: 
+    0 8px 32px rgba(0, 0, 0, 0.35),
+    0 0 60px rgba(58, 145, 199, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.card:hover::after {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 10px rgba(58, 145, 199, 0.3);
 }
 
 .card h3 {
@@ -1673,28 +2057,164 @@ const syncProductionCount = () => {
 }
 
 /* ========================================
-   左侧面板
+   左侧面板 - 可滚动
    ======================================== */
 .left-panel {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  overflow-y: auto;
+  overflow-y: scroll !important; /* 强制显示滚动条 */
+  overflow-x: hidden;
   padding-right: 4px;
+  padding-bottom: 20px;
+  /* 关键：Grid子项必须有这些属性才能滚动 */
+  height: 100%;
+  min-height: 0;
 }
 
+/* 自定义滚动条样式 - 增强可见性 */
 .left-panel::-webkit-scrollbar {
-  width: 4px;
+  width: 8px; /* 加宽以便拖动 */
 }
 
 .left-panel::-webkit-scrollbar-track {
-  background: rgba(255, 255, 255, 0.02);
-  border-radius: 2px;
+  background: rgba(10, 20, 30, 0.6); /* 更深的背景增加对比度 */
+  border-radius: 4px;
 }
 
 .left-panel::-webkit-scrollbar-thumb {
-  background: var(--border-color);
-  border-radius: 2px;
+  background: rgba(58, 145, 199, 0.5); /* 默认可见 */
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  transition: all 0.3s ease;
+}
+
+.left-panel::-webkit-scrollbar-thumb:hover {
+  background: var(--primary-color);
+  box-shadow: 0 0 10px rgba(58, 145, 199, 0.5);
+}
+
+/* ========================================
+   中间面板 - 可滚动
+   ======================================== */
+.center-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: scroll !important; /* 强制显示滚动条 */
+  overflow-x: hidden;
+  padding-right: 4px;
+  padding-bottom: 20px;
+  /* 关键：Grid子项必须有这些属性才能滚动 */
+  height: 100%;
+  min-height: 0;
+}
+
+.center-panel::-webkit-scrollbar {
+  width: 8px;
+}
+
+.center-panel::-webkit-scrollbar-track {
+  background: rgba(10, 20, 30, 0.6);
+  border-radius: 4px;
+}
+
+.center-panel::-webkit-scrollbar-thumb {
+  background: rgba(58, 145, 199, 0.5);
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.center-panel::-webkit-scrollbar-thumb:hover {
+  background: var(--primary-color);
+  box-shadow: 0 0 10px rgba(58, 145, 199, 0.5);
+}
+
+/* 传送带卡片 */
+.conveyor-card {
+  flex-shrink: 0;
+  min-height: 280px;
+}
+
+/* 图表行 */
+.charts-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  flex-shrink: 0;
+}
+
+@media (max-width: 1200px) {
+  .charts-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.chart-card,
+.history-card {
+  min-height: 300px;
+}
+
+/* ========================================
+   右侧面板 - 可滚动
+   ======================================== */
+.right-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: scroll !important; /* 强制显示滚动条 */
+  overflow-x: hidden;
+  padding-right: 4px;
+  padding-bottom: 20px;
+  /* 关键：Grid子项必须有这些属性才能滚动 */
+  height: 100%;
+  min-height: 0;
+}
+
+.right-panel::-webkit-scrollbar {
+  width: 8px;
+}
+
+.right-panel::-webkit-scrollbar-track {
+  background: rgba(10, 20, 30, 0.6);
+  border-radius: 4px;
+}
+
+.right-panel::-webkit-scrollbar-thumb {
+  background: rgba(58, 145, 199, 0.5);
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.right-panel::-webkit-scrollbar-thumb:hover {
+  background: var(--primary-color);
+  box-shadow: 0 0 10px rgba(58, 145, 199, 0.5);
+}
+
+/* 检测卡片 */
+.detection-card {
+  flex-shrink: 0;
+  min-height: 350px;
+}
+
+/* 报警卡片 */
+.alert-card {
+  flex-shrink: 0;
+}
+
+/* 统计信息卡片 */
+.stats-card {
+  flex-shrink: 0;
+}
+
+/* LED状态卡片 */
+.led-card {
+  flex-shrink: 0;
+}
+
+/* 设备信息卡片 */
+.device-card {
+  flex-shrink: 0;
 }
 
 /* 生产状态卡片 */
@@ -2696,42 +3216,81 @@ const syncProductionCount = () => {
 }
 
 /* ========================================
-   环境阈值配置样式
+   环境阈值配置样式 - 增强版
    ======================================== */
+.threshold-card {
+  flex-shrink: 0;
+}
+
+.threshold-card h3 {
+  margin-bottom: 16px;
+}
+
 .threshold-card .threshold-settings {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
 }
 
 .threshold-item {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: rgba(58, 145, 199, 0.05);
+  border-radius: 8px;
+  border: 1px solid rgba(58, 145, 199, 0.1);
 }
 
 .threshold-label {
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.8);
-  min-width: 100px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.85);
+  font-weight: 500;
 }
 
 .threshold-inputs {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .threshold-separator {
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--primary-color);
   font-weight: bold;
-  font-size: 12px;
+  font-size: 14px;
+  padding: 0 4px;
 }
 
+/* 输入框样式增强 */
 .threshold-inputs .el-input-number {
-  width: 70px;
+  width: 90px;
+}
+
+.threshold-inputs .el-input-number .el-input__wrapper {
+  background: rgba(10, 20, 35, 0.8) !important;
+  border: 1px solid rgba(58, 145, 199, 0.3) !important;
+  border-radius: 6px !important;
+  box-shadow: none !important;
+}
+
+.threshold-inputs .el-input-number .el-input__inner {
+  color: var(--text-primary) !important;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.threshold-inputs .el-input-number .el-input-number__decrease,
+.threshold-inputs .el-input-number .el-input-number__increase {
+  background: rgba(58, 145, 199, 0.15) !important;
+  border-color: rgba(58, 145, 199, 0.2) !important;
+  color: var(--primary-color) !important;
+}
+
+.threshold-inputs .el-input-number .el-input-number__decrease:hover,
+.threshold-inputs .el-input-number .el-input-number__increase:hover {
+  background: rgba(58, 145, 199, 0.3) !important;
+  color: var(--primary-light) !important;
 }
 
 /* ========================================

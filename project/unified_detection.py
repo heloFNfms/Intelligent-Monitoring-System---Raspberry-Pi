@@ -613,16 +613,25 @@ class ZoneDetector:
 
 # ==================== 产品检测器 ====================
 class ProductDetector:
-    """产品检测器 - 基于颜色和形状"""
+    """
+    产品检测器 - 基于颜色和形状
     
+    优化特性：
+    1. ROI检测区域限制，只检测中心区域
+    2. 稳定性检测，连续N帧检测到同一产品才确认
+    3. 自动计数，产品离开检测区域时自动计数
+    4. 跳帧优化，降低CPU占用
+    """
+    
+    # 颜色定义（HSV范围）
     COLOR_RANGES = {
-        "product_a": {
+        "blue": {
             "lower": np.array([100, 100, 100]),
             "upper": np.array([130, 255, 255]),
             "name": "蓝色",
             "display_color": (255, 150, 50)
         },
-        "product_b": {
+        "cyan": {
             "lower": np.array([75, 100, 100]),
             "upper": np.array([95, 255, 255]),
             "name": "青色",
@@ -630,24 +639,89 @@ class ProductDetector:
         }
     }
     
+    # 产品定义规则：颜色 + 形状 → 产品类型
+    PRODUCT_RULES = {
+        ("blue", "rectangle"): "product_a",    # 蓝色方形 → 产品A
+        ("cyan", "circle"): "product_b",       # 青色圆形 → 产品B
+    }
+    
     SHAPE_CIRCULARITY_THRESHOLD = 0.7
     MIN_CONTOUR_AREA = 1000
     MAX_CONTOUR_AREA = 100000
     
-    def __init__(self):
+    def __init__(self, frame_skip: int = 3, stability_frames: int = 3, auto_count: bool = True):
+        """
+        初始化产品检测器
+        Args:
+            frame_skip: 跳帧数，每隔N帧检测一次
+            stability_frames: 稳定性帧数，连续N帧检测到同一产品才确认
+            auto_count: 是否启用自动计数
+        """
         self.detection_count = {"product_a": 0, "product_b": 0, "unknown": 0}
         self.last_detection_time = 0
-        self.detection_cooldown = 1.0
-        print("✓ 产品检测器初始化完成")
+        self.detection_cooldown = 1.5  # 同一产品检测冷却时间
+        
+        # 跳帧控制
+        self.frame_skip = frame_skip
+        self.frame_count = 0
+        
+        # 稳定性检测
+        self.stability_frames = stability_frames
+        self.consecutive_detections = []  # 连续检测结果队列
+        self.confirmed_product = None     # 已确认的产品
+        
+        # 自动计数
+        self.auto_count = auto_count
+        self.product_in_roi = False       # 产品是否在检测区域内
+        self.last_confirmed_product = None  # 上一个确认的产品（用于离开时计数）
+        
+        # ROI检测区域（相对比例）
+        self.roi_margin = 0.15  # 边距比例，0.15表示上下左右各留15%
+        
+        # 缓存上一次的检测结果（用于跳帧时显示）
+        self.last_result = None
+        self.last_contours = []
+        self.last_color_type = "unknown"
+        self.last_bbox = None
+        
+        print(f"✓ 产品检测器初始化完成")
+        print(f"  跳帧: {frame_skip} | 稳定帧数: {stability_frames} | 自动计数: {auto_count}")
+    
+    def _get_roi(self, frame: np.ndarray) -> Tuple[int, int, int, int]:
+        """获取ROI区域坐标"""
+        h, w = frame.shape[:2]
+        margin_x = int(w * self.roi_margin)
+        margin_y = int(h * self.roi_margin)
+        return margin_x, margin_y, w - margin_x, h - margin_y
+    
+    def _is_in_roi(self, bbox: Tuple[int, int, int, int], frame_shape: Tuple[int, int]) -> bool:
+        """判断物体中心是否在ROI内"""
+        h, w = frame_shape
+        x, y, bw, bh = bbox
+        center_x = x + bw // 2
+        center_y = y + bh // 2
+        
+        roi_x1, roi_y1, roi_x2, roi_y2 = self._get_roi(np.zeros((h, w, 3), dtype=np.uint8))
+        return roi_x1 < center_x < roi_x2 and roi_y1 < center_y < roi_y2
     
     def detect_color(self, frame: np.ndarray) -> Tuple[str, np.ndarray]:
-        """检测颜色"""
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        """
+        检测颜色（只在ROI区域内检测）
+        Returns:
+            (颜色类型, 掩码) - 颜色类型为 "blue"/"cyan"/"unknown"
+        """
+        h, w = frame.shape[:2]
+        roi_x1, roi_y1, roi_x2, roi_y2 = self._get_roi(frame)
+        
+        # 只处理ROI区域
+        roi_frame = frame[roi_y1:roi_y2, roi_x1:roi_x2]
+        hsv = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2HSV)
+        
         best_match = "unknown"
         best_area = 0
         best_mask = None
         
-        for product_type, color_range in self.COLOR_RANGES.items():
+        for color_name, color_range in self.COLOR_RANGES.items():
             mask = cv2.inRange(hsv, color_range["lower"], color_range["upper"])
             kernel = np.ones((5, 5), np.uint8)
             mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
@@ -656,104 +730,238 @@ class ProductDetector:
             
             if area > best_area and area > self.MIN_CONTOUR_AREA:
                 best_area = area
-                best_match = product_type
+                best_match = color_name
                 best_mask = mask
         
-        return best_match, best_mask if best_mask is not None else np.zeros_like(frame[:,:,0])
+        # 将ROI掩码扩展到完整帧大小
+        if best_mask is not None:
+            full_mask = np.zeros((h, w), dtype=np.uint8)
+            full_mask[roi_y1:roi_y2, roi_x1:roi_x2] = best_mask
+            return best_match, full_mask
+        
+        return "unknown", np.zeros((h, w), dtype=np.uint8)
     
-    def detect_shape(self, mask: np.ndarray) -> Tuple[str, List[np.ndarray]]:
-        """检测形状"""
+    def detect_shape(self, mask: np.ndarray) -> Tuple[str, List[np.ndarray], Optional[Tuple[int, int, int, int]]]:
+        """
+        检测形状
+        Returns:
+            (形状类型, 轮廓列表, 边界框) - 形状类型为 "circle"/"rectangle"/"unknown"
+        """
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
-            return "unknown", []
+            return "unknown", [], None
         
         valid_contours = [c for c in contours
                         if self.MIN_CONTOUR_AREA < cv2.contourArea(c) < self.MAX_CONTOUR_AREA]
         if not valid_contours:
-            return "unknown", []
+            return "unknown", [], None
         
         largest = max(valid_contours, key=cv2.contourArea)
         area = cv2.contourArea(largest)
         perimeter = cv2.arcLength(largest, True)
         
         if perimeter == 0:
-            return "unknown", valid_contours
+            return "unknown", valid_contours, None
         
         circularity = 4 * np.pi * area / (perimeter * perimeter)
         shape = "circle" if circularity > self.SHAPE_CIRCULARITY_THRESHOLD else "rectangle"
-        return shape, valid_contours
+        
+        # 获取边界框
+        bbox = cv2.boundingRect(largest)
+        
+        return shape, valid_contours, bbox
+    
+    def _determine_product(self, color_type: str, shape_type: str) -> Tuple[str, float]:
+        """
+        根据颜色和形状判断产品类型
+        Returns:
+            (产品类型, 置信度)
+        """
+        if color_type == "unknown" or shape_type == "unknown":
+            return "unknown", 0.0
+        
+        # 查找匹配的产品规则
+        product_type = self.PRODUCT_RULES.get((color_type, shape_type))
+        
+        if product_type:
+            return product_type, 0.95
+        else:
+            return "unknown", 0.3
+    
+    def _update_stability(self, product_type: str) -> Tuple[str, bool]:
+        """
+        更新稳定性检测
+        Returns:
+            (确认的产品类型, 是否新确认)
+        """
+        self.consecutive_detections.append(product_type)
+        
+        # 保持队列长度
+        if len(self.consecutive_detections) > self.stability_frames:
+            self.consecutive_detections.pop(0)
+        
+        # 检查是否连续检测到同一产品
+        if len(self.consecutive_detections) >= self.stability_frames:
+            if all(p == product_type and p != "unknown" for p in self.consecutive_detections):
+                if self.confirmed_product != product_type:
+                    self.confirmed_product = product_type
+                    return product_type, True  # 新确认
+                return product_type, False  # 已确认
+        
+        return self.confirmed_product or "unknown", False
+    
+    def _handle_auto_count(self, product_in_roi: bool, confirmed_product: str):
+        """处理自动计数逻辑"""
+        if not self.auto_count:
+            return
+        
+        # 产品从ROI内移动到ROI外时计数
+        if self.product_in_roi and not product_in_roi:
+            if self.last_confirmed_product and self.last_confirmed_product != "unknown":
+                current_time = time.time()
+                if current_time - self.last_detection_time >= self.detection_cooldown:
+                    self.detection_count[self.last_confirmed_product] += 1
+                    self.last_detection_time = current_time
+                    print(f"\n📦 自动计数: {self.last_confirmed_product} | 总计: {self.detection_count[self.last_confirmed_product]}")
+                    # 重置确认状态
+                    self.confirmed_product = None
+                    self.consecutive_detections.clear()
+        
+        # 更新状态
+        self.product_in_roi = product_in_roi
+        if confirmed_product != "unknown":
+            self.last_confirmed_product = confirmed_product
     
     def detect(self, frame: np.ndarray) -> Tuple[np.ndarray, dict]:
-        """执行产品检测"""
+        """
+        执行产品检测（带跳帧优化和稳定性检测）
+        """
         output = frame.copy()
         h, w = output.shape[:2]
         
-        # 颜色检测
-        color_type, mask = self.detect_color(frame)
+        # 绘制ROI区域
+        roi_x1, roi_y1, roi_x2, roi_y2 = self._get_roi(frame)
+        cv2.rectangle(output, (roi_x1, roi_y1), (roi_x2, roi_y2), (100, 200, 100), 2)
+        cv2.putText(output, "Detection ROI", (roi_x1 + 5, roi_y1 - 8), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 200, 100), 1)
         
-        # 形状检测
-        shape_type, contours = self.detect_shape(mask)
+        # 跳帧控制
+        self.frame_count += 1
+        should_detect = (self.frame_count % (self.frame_skip + 1) == 0)
         
-        # 综合判断
-        result = {
+        product_in_roi = False
+        confirmed_product = "unknown"
+        is_new_confirmation = False
+        
+        if should_detect:
+            # 执行实际检测
+            color_type, mask = self.detect_color(frame)
+            shape_type, contours, bbox = self.detect_shape(mask)
+            product_type, confidence = self._determine_product(color_type, shape_type)
+            
+            # 检查是否在ROI内
+            if bbox:
+                product_in_roi = self._is_in_roi(bbox, (h, w))
+            
+            # 稳定性检测
+            if product_in_roi and product_type != "unknown":
+                confirmed_product, is_new_confirmation = self._update_stability(product_type)
+            else:
+                # 不在ROI内或未检测到，清空稳定性队列
+                if not product_in_roi:
+                    self.consecutive_detections.clear()
+            
+            # 处理自动计数
+            self._handle_auto_count(product_in_roi, confirmed_product)
+            
+            # 缓存结果
+            self.last_color_type = color_type
+            self.last_contours = contours
+            self.last_bbox = bbox
+            self.last_result = {
+                "mode": "product",
+                "detected": confirmed_product != "unknown",
+                "product_type": confirmed_product,
+                "color": self.COLOR_RANGES.get(color_type, {}).get("name", "未知"),
+                "shape": "圆形" if shape_type == "circle" else ("方形" if shape_type == "rectangle" else "未知"),
+                "confidence": confidence if confirmed_product != "unknown" else 0.0,
+                "in_roi": product_in_roi,
+                "is_new": is_new_confirmation,
+                "size": {"width": bbox[2], "height": bbox[3]} if bbox else None
+            }
+        
+        # 使用缓存的结果绘制
+        result = self.last_result or {
             "mode": "product",
             "detected": False,
             "product_type": "unknown",
-            "color": "unknown",
-            "shape": "unknown",
-            "confidence": 0.0
+            "color": "未知",
+            "shape": "未知",
+            "confidence": 0.0,
+            "in_roi": False,
+            "is_new": False,
+            "size": None
         }
         
-        if color_type != "unknown" and shape_type != "unknown":
-            if color_type == "product_a" and shape_type == "rectangle":
-                product_type, confidence = "product_a", 0.9
-            elif color_type == "product_b" and shape_type == "circle":
-                product_type, confidence = "product_b", 0.9
-            elif color_type in ["product_a", "product_b"]:
-                product_type, confidence = color_type, 0.7
+        # 绘制轮廓和标注
+        if self.last_contours and self.last_bbox:
+            color_info = self.COLOR_RANGES.get(self.last_color_type, {})
+            display_color = color_info.get("display_color", (128, 128, 128))
+            
+            # 如果已确认产品，用更亮的颜色
+            if result["detected"]:
+                display_color = tuple(min(255, c + 50) for c in display_color)
+            
+            cv2.drawContours(output, self.last_contours, -1, display_color, 2)
+            
+            x, y, bw, bh = self.last_bbox
+            cv2.rectangle(output, (x, y), (x+bw, y+bh), display_color, 2)
+            
+            # 产品标签
+            if result["detected"]:
+                product_label = "Product A ✓" if result["product_type"] == "product_a" else "Product B ✓"
+                cv2.putText(output, product_label, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, display_color, 2)
             else:
-                product_type, confidence = "unknown", 0.3
+                cv2.putText(output, "Detecting...", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (150, 150, 150), 1)
             
-            result.update({
-                "detected": True,
-                "product_type": product_type,
-                "color": self.COLOR_RANGES.get(color_type, {}).get("name", "未知"),
-                "shape": "圆形" if shape_type == "circle" else "方形",
-                "confidence": confidence
-            })
+            # 详细信息
+            info_y = y + bh + 18
+            cv2.putText(output, f"{result['color']} {result['shape']}", (x, info_y),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.45, display_color, 1)
             
-            # 绘制轮廓
-            if contours:
-                color = self.COLOR_RANGES.get(color_type, {}).get("display_color", (128, 128, 128))
-                cv2.drawContours(output, contours, -1, color, 3)
-                
-                largest = max(contours, key=cv2.contourArea)
-                x, y, bw, bh = cv2.boundingRect(largest)
-                cv2.rectangle(output, (x, y), (x+bw, y+bh), color, 2)
-                
-                label = f"Product {'A' if product_type == 'product_a' else 'B'}"
-                cv2.putText(output, label, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
-                cv2.putText(output, f"Conf: {confidence:.0%}", (x, y+bh+20),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-        
-        # 绘制检测区域
-        cv2.rectangle(output, (50, 50), (w-50, h-50), (100, 100, 100), 2)
-        cv2.putText(output, "Detection Area", (55, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 100, 100), 1)
+            if result["size"]:
+                info_y += 16
+                cv2.putText(output, f"Size: {result['size']['width']}x{result['size']['height']}px", (x, info_y),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, (180, 180, 180), 1)
         
         # 统计信息
         cv2.putText(output, f"Product A: {self.detection_count['product_a']}", (10, 30),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, self.COLOR_RANGES["product_a"]["display_color"], 2)
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, self.COLOR_RANGES["blue"]["display_color"], 2)
         cv2.putText(output, f"Product B: {self.detection_count['product_b']}", (10, 55),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, self.COLOR_RANGES["product_b"]["display_color"], 2)
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, self.COLOR_RANGES["cyan"]["display_color"], 2)
+        
+        # 稳定性指示器
+        stability_progress = len(self.consecutive_detections) / self.stability_frames
+        bar_width = 100
+        bar_x = 10
+        bar_y = 75
+        cv2.rectangle(output, (bar_x, bar_y), (bar_x + bar_width, bar_y + 8), (50, 50, 50), -1)
+        cv2.rectangle(output, (bar_x, bar_y), (bar_x + int(bar_width * stability_progress), bar_y + 8), 
+                     (0, 200, 0) if stability_progress >= 1 else (200, 200, 0), -1)
+        cv2.putText(output, "Stability", (bar_x + bar_width + 5, bar_y + 8), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.35, (150, 150, 150), 1)
         
         # 模式标识
-        cv2.putText(output, "[PRODUCT MODE]", (w - 180, 30),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 150, 50), 2)
+        mode_text = "[PRODUCT MODE]"
+        if self.auto_count:
+            mode_text += " [AUTO]"
+        cv2.putText(output, mode_text, (w - 220, 30),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 150, 50), 2)
         
         return output, result
     
     def capture(self, frame: np.ndarray) -> Optional[dict]:
-        """手动捕获检测"""
+        """手动捕获检测（用于手动计数）"""
         current_time = time.time()
         if current_time - self.last_detection_time < self.detection_cooldown:
             return None
@@ -762,13 +970,15 @@ class ProductDetector:
         if result["detected"] and result["product_type"] != "unknown":
             self.last_detection_time = current_time
             self.detection_count[result["product_type"]] += 1
-            print(f"\n📦 检测到产品: {result['product_type']} | {result['color']} | {result['shape']}")
+            print(f"\n📦 手动捕获: {result['product_type']} | {result['color']} | {result['shape']}")
             return result
         return None
     
     def reset_count(self):
         """重置计数"""
         self.detection_count = {"product_a": 0, "product_b": 0, "unknown": 0}
+        self.confirmed_product = None
+        self.consecutive_detections.clear()
         print("✓ 产品计数已重置")
 
 
@@ -1088,8 +1298,12 @@ class UnifiedDetectionSystem:
         # 设置离开危险区通知回调
         self.zone_detector.set_exit_callback(self._on_zone_exit)
         
-        # 初始化产品检测器
-        self.product_detector = ProductDetector()
+        # 初始化产品检测器（跳帧优化，稳定性检测，自动计数）
+        self.product_detector = ProductDetector(
+            frame_skip=3,           # 每4帧检测一次
+            stability_frames=3,     # 连续3帧确认
+            auto_count=True         # 启用自动计数
+        )
         
         print("✓ 所有检测器初始化完成")
         print("✓ 人员状态追踪已启用（进入/离开危险区域）")
