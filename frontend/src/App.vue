@@ -2,9 +2,17 @@
   <div class="dashboard" :class="{ 'alarm-active': alarmActive }">
     <!-- 超炫酷背景特效层 -->
     <div class="bg-effects">
-      <!-- 粒子系统 -->
+      <!-- 深空星云背景 -->
+      <div class="nebula-bg"></div>
+      
+      <!-- 粒子系统 - 分层视差 -->
       <div class="particles-container">
-        <div class="particle" v-for="n in 30" :key="'p'+n" :style="getParticleBgStyle(n)"></div>
+        <!-- 远景星空 -->
+        <div class="particle star-sm" v-for="n in 100" :key="'sm'+n" :style="getStarStyle(n, 'sm')"></div>
+        <!-- 中景粒子 -->
+        <div class="particle star-md" v-for="n in 50" :key="'md'+n" :style="getStarStyle(n, 'md')"></div>
+        <!-- 近景浮尘 -->
+        <div class="particle star-lg" v-for="n in 20" :key="'lg'+n" :style="getStarStyle(n, 'lg')"></div>
       </div>
       
       <!-- 能量流动线条 -->
@@ -32,6 +40,23 @@
       
       <!-- 六边形网格 -->
       <div class="hex-grid"></div>
+      
+      <!-- 🔥 蓝色幽冥火特效 -->
+      <div class="ghost-fire-container">
+        <!-- 火焰底层光晕 -->
+        <div class="fire-glow"></div>
+        <!-- 多个火焰 -->
+        <div class="ghost-flame flame-1"></div>
+        <div class="ghost-flame flame-2"></div>
+        <div class="ghost-flame flame-3"></div>
+        <div class="ghost-flame flame-4"></div>
+        <div class="ghost-flame flame-5"></div>
+        <div class="ghost-flame flame-6"></div>
+        <div class="ghost-flame flame-7"></div>
+        <div class="ghost-flame flame-8"></div>
+        <!-- 火焰火花 - 增加数量以增强粒子感 -->
+        <div class="fire-spark" v-for="n in 40" :key="'spark'+n" :style="getFireSparkStyle(n)"></div>
+      </div>
     </div>
     
     <!-- 全屏报警遮罩 -->
@@ -578,7 +603,45 @@ const productBCount = ref(0)
 // 声音报警
 let alarmAudio = null
 
-// 背景粒子样式生成
+// 星空粒子样式生成
+const getStarStyle = (n, type) => {
+  const seed = (n * 1337) % 100
+  const top = (n * 7919) % 100
+  
+  let size, opacity, duration, delay
+  
+  if (type === 'sm') {
+    // 远景星空：极小，几乎静止，闪烁
+    size = Math.random() * 2 + 1
+    opacity = Math.random() * 0.5 + 0.1
+    duration = Math.random() * 3 + 2
+    delay = Math.random() * 5
+  } else if (type === 'md') {
+    // 中景粒子：中等大小，缓慢漂浮
+    size = Math.random() * 3 + 2
+    opacity = Math.random() * 0.4 + 0.2
+    duration = Math.random() * 10 + 10
+    delay = Math.random() * 5
+  } else {
+    // 近景浮尘：较大，明显移动
+    size = Math.random() * 4 + 3
+    opacity = Math.random() * 0.3 + 0.1
+    duration = Math.random() * 20 + 15
+    delay = Math.random() * 5
+  }
+
+  return {
+    left: `${seed}%`,
+    top: `${top}%`,
+    width: `${size}px`,
+    height: `${size}px`,
+    opacity: opacity,
+    animationDelay: `${delay}s`,
+    animationDuration: `${duration}s`
+  }
+}
+
+// 废弃旧的粒子函数，但保留以防万一引用
 const getParticleBgStyle = (n) => ({
   left: `${(n * 3.3) % 100}%`,
   top: `${(n * 7.1) % 100}%`,
@@ -593,6 +656,13 @@ const getStreamStyle = (n) => ({
   left: `${n * 20}%`,
   animationDelay: `${n * 0.5}s`,
   animationDuration: `${3 + n * 0.5}s`
+})
+
+// 幽冥火火花样式生成
+const getFireSparkStyle = (n) => ({
+  left: `${5 + (n * 6.5) % 90}%`,
+  animationDelay: `${(n * 0.4) % 5}s`,
+  animationDuration: `${2 + (n % 3)}s`
 })
 
 // 计算属性
@@ -1606,15 +1676,15 @@ const syncProductionCount = () => {
 .dashboard {
   min-height: 100vh;
   background: 
-    radial-gradient(ellipse at 20% 0%, rgba(58, 145, 199, 0.08) 0%, transparent 50%),
-    radial-gradient(ellipse at 80% 100%, rgba(45, 183, 181, 0.06) 0%, transparent 50%),
-    linear-gradient(180deg, var(--bg-primary) 0%, var(--bg-secondary) 50%, var(--bg-tertiary) 100%);
+    radial-gradient(circle at 50% 50%, rgba(20, 30, 50, 0.4) 0%, transparent 80%),
+    linear-gradient(180deg, #020408 0%, #050a14 40%, #081020 100%);
   color: var(--text-primary);
   font-family: 'Microsoft YaHei', 'PingFang SC', -apple-system, sans-serif;
   position: relative;
+  overflow: hidden;
 }
 
-/* 微妙的网格背景 */
+/* 微妙的网格背景 - 增强可见度 */
 .dashboard::before {
   content: '';
   position: fixed;
@@ -1623,17 +1693,18 @@ const syncProductionCount = () => {
   right: 0;
   bottom: 0;
   background-image: 
-    linear-gradient(rgba(58, 145, 199, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(58, 145, 199, 0.03) 1px, transparent 1px);
-  background-size: 50px 50px;
+    linear-gradient(rgba(58, 145, 199, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(58, 145, 199, 0.05) 1px, transparent 1px);
+  background-size: 60px 60px;
   pointer-events: none;
   z-index: 0;
-  animation: gridMove 20s linear infinite;
+  animation: gridMove 40s linear infinite;
+  opacity: 0.6;
 }
 
 @keyframes gridMove {
-  0% { background-position: 0 0; }
-  100% { background-position: 50px 50px; }
+  0% { transform: perspective(1000px) rotateX(5deg) translateY(0); }
+  100% { transform: perspective(1000px) rotateX(5deg) translateY(60px); }
 }
 
 /* ========================================
@@ -1650,6 +1721,26 @@ const syncProductionCount = () => {
   overflow: hidden;
 }
 
+/* 星云背景 */
+.nebula-bg {
+  position: absolute;
+  inset: -50%;
+  width: 200%;
+  height: 200%;
+  background: 
+    radial-gradient(circle at 30% 40%, rgba(58, 145, 199, 0.15) 0%, transparent 40%),
+    radial-gradient(circle at 70% 60%, rgba(45, 183, 181, 0.1) 0%, transparent 40%),
+    radial-gradient(circle at 50% 20%, rgba(70, 30, 100, 0.1) 0%, transparent 50%);
+  filter: blur(60px);
+  animation: nebulaRotate 120s linear infinite;
+  opacity: 0.7;
+}
+
+@keyframes nebulaRotate {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
 /* 粒子系统 */
 .particles-container {
   position: absolute;
@@ -1658,29 +1749,40 @@ const syncProductionCount = () => {
 
 .particles-container .particle {
   position: absolute;
-  background: radial-gradient(circle, rgba(58, 145, 199, 0.8) 0%, transparent 70%);
+  background: white;
   border-radius: 50%;
-  animation: particleDrift 6s ease-in-out infinite;
-  filter: blur(1px);
+  box-shadow: 0 0 4px rgba(255, 255, 255, 0.8);
 }
 
-@keyframes particleDrift {
-  0%, 100% { 
-    transform: translateY(0) translateX(0) scale(1); 
-    opacity: 0.3; 
-  }
-  25% { 
-    transform: translateY(-30px) translateX(15px) scale(1.2); 
-    opacity: 0.6; 
-  }
-  50% { 
-    transform: translateY(-10px) translateX(-10px) scale(0.8); 
-    opacity: 0.8; 
-  }
-  75% { 
-    transform: translateY(-50px) translateX(20px) scale(1.1); 
-    opacity: 0.4; 
-  }
+/* 远景星空 - 闪烁 */
+.particle.star-sm {
+  background: rgba(255, 255, 255, 0.6);
+  animation: twinkle 4s ease-in-out infinite;
+}
+
+/* 中景粒子 - 漂浮 */
+.particle.star-md {
+  background: rgba(180, 220, 255, 0.7);
+  box-shadow: 0 0 6px rgba(180, 220, 255, 0.5);
+  animation: floatUp 20s linear infinite;
+}
+
+/* 近景浮尘 - 缓慢移动 */
+.particle.star-lg {
+  background: rgba(100, 200, 255, 0.4);
+  box-shadow: 0 0 10px rgba(100, 200, 255, 0.3);
+  filter: blur(1px);
+  animation: floatUp 40s linear infinite;
+}
+
+@keyframes twinkle {
+  0%, 100% { opacity: 0.3; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1.2); }
+}
+
+@keyframes floatUp {
+  0% { transform: translateY(0); }
+  100% { transform: translateY(-100vh); }
 }
 
 /* 能量流动线条 */
@@ -1882,7 +1984,173 @@ const syncProductionCount = () => {
 }
 
 /* ========================================
-   顶部标题栏
+   🔥 蓝色火焰特效 - 升起飘散版
+   ======================================== */
+.ghost-fire-container {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 400px; /* 增加高度以便观察升起过程 */
+  pointer-events: none;
+  z-index: 1;
+  overflow: hidden;
+}
+
+/* 幽冥火焰 - 升起主体 */
+.ghost-flame {
+  position: absolute;
+  bottom: -50px; /* 起始位置在屏幕外 */
+  width: 60px;
+  height: 100px;
+  opacity: 0;
+  transform-origin: center bottom;
+  /* 基础动画：升起并消散 */
+  animation: flameCycle 6s ease-in-out infinite;
+}
+
+/* 火焰升起循环动画 */
+@keyframes flameCycle {
+  0% {
+    bottom: -50px;
+    transform: scale(0.5);
+    opacity: 0;
+    filter: blur(5px);
+  }
+  20% {
+    bottom: 20px;
+    transform: scale(1);
+    opacity: 0.8;
+    filter: blur(2px);
+  }
+  50% {
+    bottom: 80px;
+    transform: scale(1.1);
+    opacity: 0.6;
+    filter: blur(4px);
+  }
+  80% {
+    bottom: 150px;
+    transform: scale(1.3);
+    opacity: 0.2;
+    filter: blur(10px);
+  }
+  100% {
+    bottom: 200px;
+    transform: scale(1.5);
+    opacity: 0;
+    filter: blur(20px);
+  }
+}
+
+/* 火焰内部结构 - 保持摇曳感 */
+.ghost-flame::before,
+.ghost-flame::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  border-radius: 50% 50% 50% 50% / 60% 60% 40% 40%;
+}
+
+/* 外焰 */
+.ghost-flame::before {
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(0deg,
+    rgba(30, 144, 255, 0.8) 0%,
+    rgba(100, 200, 255, 0.4) 60%,
+    rgba(200, 240, 255, 0) 100%
+  );
+  animation: flickerBody 1s ease-in-out infinite alternate;
+}
+
+/* 内焰 */
+.ghost-flame::after {
+  width: 60%;
+  height: 70%;
+  background: linear-gradient(0deg,
+    rgba(220, 250, 255, 0.9) 0%,
+    rgba(150, 220, 255, 0.5) 50%,
+    transparent 100%
+  );
+  filter: blur(4px);
+  animation: flickerCore 0.6s ease-in-out infinite alternate;
+}
+
+@keyframes flickerBody {
+  0% { transform: translateX(-50%) scaleX(1) skewX(0deg); }
+  100% { transform: translateX(-50%) scaleX(0.95) skewX(2deg); }
+}
+
+@keyframes flickerCore {
+  0% { transform: translateX(-50%) scaleY(1); opacity: 0.8; }
+  100% { transform: translateX(-50%) scaleY(1.1); opacity: 1; }
+}
+
+/* 8组火焰 - 错落升起 */
+.flame-1 { left: 10%; animation-delay: 0s; animation-duration: 5s; }
+.flame-2 { left: 22%; animation-delay: 1.5s; animation-duration: 6s; }
+.flame-3 { left: 35%; animation-delay: 0.5s; animation-duration: 5.5s; }
+.flame-4 { left: 48%; animation-delay: 2.5s; animation-duration: 6.5s; }
+.flame-5 { left: 60%; animation-delay: 1s; animation-duration: 5.2s; }
+.flame-6 { left: 72%; animation-delay: 3s; animation-duration: 5.8s; }
+.flame-7 { left: 85%; animation-delay: 2s; animation-duration: 6.2s; }
+.flame-8 { left: 5%; animation-delay: 4s; animation-duration: 5.3s; }
+
+/* 火花粒子 - 飘散效果 */
+.fire-spark {
+  position: absolute;
+  /* 初始位置较低，随后飘起 */
+  bottom: 0; 
+  width: 4px;
+  height: 4px;
+  background: rgba(180, 230, 255, 0.9);
+  border-radius: 50%;
+  box-shadow: 0 0 8px rgba(100, 200, 255, 0.8);
+  /* 基础动画 */
+  opacity: 0;
+  animation: sparkDrift 5s linear infinite;
+}
+
+@keyframes sparkDrift {
+  0% {
+    bottom: 20px;
+    transform: translateX(0) scale(0.5);
+    opacity: 0;
+  }
+  20% {
+    opacity: 1;
+    transform: translateX(5px) scale(1);
+  }
+  50% {
+    transform: translateX(-10px) scale(0.8);
+    opacity: 0.8;
+  }
+  100% {
+    bottom: 350px; /* 飘得更高 */
+    transform: translateX(20px) scale(0);
+    opacity: 0;
+  }
+}
+
+/* 底部微弱光晕 */
+.fire-glow {
+  position: absolute;
+  bottom: -40px;
+  left: 0;
+  right: 0;
+  height: 100px;
+  background: radial-gradient(ellipse 60% 60% at 50% 100%, 
+    rgba(30, 144, 255, 0.2) 0%, 
+    transparent 70%
+  );
+  animation: glowPulse 4s ease-in-out infinite;
+}
+
+/* ========================================
+   顶部标题栏 - 赛博HUD风格
    ======================================== */
 .header {
   position: relative;
@@ -1890,42 +2158,113 @@ const syncProductionCount = () => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 16px 32px;
-  background: var(--glass-bg);
-  backdrop-filter: blur(var(--glass-blur));
-  -webkit-backdrop-filter: blur(var(--glass-blur));
-  border-bottom: 1px solid var(--border-color);
+  padding: 0 32px;
+  height: 70px;
+  background: rgba(10, 15, 25, 0.85);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid rgba(58, 145, 199, 0.3);
+  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5);
+}
+
+/* 顶部流光线条 */
+.header::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  width: 100%;
+  height: 1px;
+  background: linear-gradient(90deg, 
+    transparent 0%, 
+    var(--primary-color) 20%, 
+    var(--accent-light) 50%, 
+    var(--primary-color) 80%, 
+    transparent 100%
+  );
+  box-shadow: 0 0 10px var(--primary-color);
+  opacity: 0.8;
 }
 
 .header h1 {
-  font-size: 22px;
-  font-weight: 500;
-  letter-spacing: 1px;
-  color: var(--text-primary);
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: #fff;
+  text-shadow: 0 0 10px rgba(58, 145, 199, 0.8);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: linear-gradient(180deg, #fff 0%, #bde6ff 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* LOGO图标发光 */
+.header h1::before {
+  content: '◈';
+  font-size: 28px;
+  background: none;
+  -webkit-text-fill-color: var(--accent-light);
+  filter: drop-shadow(0 0 5px var(--accent-light));
+  animation: logoSpin 10s linear infinite;
+}
+
+@keyframes logoSpin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
 }
 
 .header-info {
   display: flex;
-  gap: 24px;
+  gap: 30px;
   align-items: center;
+  background: rgba(0, 0, 0, 0.3);
+  padding: 8px 20px;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .connection-status {
   font-size: 13px;
   color: var(--danger-color);
   font-family: var(--font-mono);
-  letter-spacing: 0.5px;
+  letter-spacing: 1px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-transform: uppercase;
+}
+
+.connection-status::before {
+  content: '';
+  display: block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 8px currentColor;
 }
 
 .connection-status.connected {
   color: var(--success-color);
 }
 
+.connection-status.connected::before {
+  animation: blink 2s infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.8); }
+}
+
 .time {
-  font-size: 13px;
-  color: var(--text-secondary);
+  font-size: 14px;
+  color: var(--primary-light);
   font-family: var(--font-mono);
-  letter-spacing: 0.5px;
+  letter-spacing: 1px;
+  text-shadow: 0 0 5px rgba(58, 145, 199, 0.5);
 }
 
 /* ========================================
@@ -1973,20 +2312,19 @@ const syncProductionCount = () => {
 }
 
 /* ========================================
-   卡片组件 - 超炫酷毛玻璃效果
+   卡片组件 - 赛博边框升级版
    ======================================== */
 .card {
-  background: var(--glass-bg);
-  backdrop-filter: blur(var(--glass-blur));
-  -webkit-backdrop-filter: blur(var(--glass-blur));
-  border-radius: 10px;
+  background: rgba(10, 15, 25, 0.7);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-radius: 4px; /* 减小圆角以配合硬朗风格 */
   padding: 16px;
-  border: 1px solid var(--border-color);
+  border: 1px solid rgba(58, 145, 199, 0.2);
   box-shadow: 
-    0 4px 24px rgba(0, 0, 0, 0.3),
-    0 0 40px rgba(58, 145, 199, 0.03),
-    inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  transition: all var(--transition-normal) ease;
+    0 4px 24px rgba(0, 0, 0, 0.4),
+    inset 0 0 30px rgba(58, 145, 199, 0.05);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   position: relative;
   overflow: hidden;
   /* 确保卡片内容不会被截断 */
@@ -1994,66 +2332,186 @@ const syncProductionCount = () => {
   flex-shrink: 0;
 }
 
-/* 卡片光泽扫过效果 */
+/* 顶部流光 */
 .card::before {
   content: '';
   position: absolute;
   top: 0;
   left: -100%;
   width: 100%;
-  height: 100%;
-  background: linear-gradient(90deg, 
-    transparent 0%, 
-    rgba(255, 255, 255, 0.02) 50%, 
-    transparent 100%
-  );
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--primary-color), transparent);
   transition: left 0.5s ease;
-  pointer-events: none;
+  z-index: 1;
 }
 
 .card:hover::before {
   left: 100%;
+  transition: left 0.8s ease;
 }
 
-/* 卡片角落装饰 */
+/* 四角装饰 */
 .card::after {
   content: '';
   position: absolute;
-  top: 0;
-  right: 0;
-  width: 30px;
-  height: 30px;
-  border-top: 2px solid var(--border-color);
-  border-right: 2px solid var(--border-color);
-  border-radius: 0 10px 0 0;
-  transition: all var(--transition-normal) ease;
+  inset: 0;
+  border: 1px solid transparent;
+  /* 使用 gradient 模拟四角 */
+  background: 
+    linear-gradient(135deg, var(--primary-color) 0%, var(--primary-color) 100%) top left,
+    linear-gradient(135deg, var(--primary-color) 0%, var(--primary-color) 100%) top right,
+    linear-gradient(135deg, var(--primary-color) 0%, var(--primary-color) 100%) bottom left,
+    linear-gradient(135deg, var(--primary-color) 0%, var(--primary-color) 100%) bottom right;
+  background-size: 8px 8px; /* 边角大小 */
+  background-repeat: no-repeat;
+  mask: 
+    linear-gradient(#fff 0 0) content-box, 
+    linear-gradient(#fff 0 0);
+  -webkit-mask: 
+    linear-gradient(#fff 0 0) content-box, 
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
   pointer-events: none;
+  opacity: 0.5;
+  transition: opacity 0.3s ease;
+}
+
+/* 真正的四角SVG替代方案（用CSS模拟） */
+.card > .corner-marker {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border-color: var(--primary-light);
+  border-style: solid;
+  transition: all 0.3s ease;
+  pointer-events: none;
+  opacity: 0.6;
 }
 
 .card:hover {
-  border-color: var(--border-glow);
+  border-color: rgba(58, 145, 199, 0.5);
   transform: translateY(-2px);
   box-shadow: 
-    0 8px 32px rgba(0, 0, 0, 0.35),
-    0 0 60px rgba(58, 145, 199, 0.08),
-    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    0 10px 40px rgba(0, 0, 0, 0.6),
+    0 0 20px rgba(58, 145, 199, 0.1),
+    inset 0 0 50px rgba(58, 145, 199, 0.1);
 }
 
 .card:hover::after {
-  border-color: var(--primary-color);
-  box-shadow: 0 0 10px rgba(58, 145, 199, 0.3);
+  opacity: 1;
+  background-size: 12px 12px; /* 悬停时边角变大 */
 }
 
 .card h3 {
-  font-size: 13px;
-  font-weight: 500;
-  margin-bottom: 12px;
-  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 16px;
+  color: var(--primary-light);
   text-transform: uppercase;
-  letter-spacing: 1.2px;
+  letter-spacing: 2px;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(58, 145, 199, 0.1);
+}
+
+/* 标题前的装饰块 */
+.card h3::before {
+  content: '';
+  display: block;
+  width: 4px;
+  height: 16px;
+  background: var(--accent-color);
+  box-shadow: 0 0 8px var(--accent-color);
+}
+
+/* ========================================
+   自定义控件样式 - 赛博按钮
+   ======================================== */
+.el-button {
+  border: none !important;
+  background: rgba(58, 145, 199, 0.15) !important;
+  color: var(--primary-light) !important;
+  border: 1px solid rgba(58, 145, 199, 0.3) !important;
+  transition: all 0.3s ease !important;
+  font-family: var(--font-mono) !important;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.el-button:hover, .el-button:focus {
+  background: rgba(58, 145, 199, 0.3) !important;
+  box-shadow: 0 0 15px rgba(58, 145, 199, 0.4) !important;
+  color: #fff !important;
+  border-color: var(--primary-light) !important;
+  transform: translateY(-1px);
+}
+
+.el-button--primary {
+  background: rgba(58, 145, 199, 0.3) !important;
+  border-color: var(--primary-color) !important;
+}
+
+.el-button--success {
+  background: rgba(74, 157, 110, 0.2) !important;
+  color: var(--success-color) !important;
+  border-color: rgba(74, 157, 110, 0.4) !important;
+}
+
+.el-button--success:hover {
+  background: rgba(74, 157, 110, 0.4) !important;
+  box-shadow: 0 0 15px rgba(74, 157, 110, 0.4) !important;
+  color: #fff !important;
+}
+
+.el-button--danger {
+  background: rgba(199, 80, 80, 0.2) !important;
+  color: var(--danger-color) !important;
+  border-color: rgba(199, 80, 80, 0.4) !important;
+}
+
+.el-button--danger:hover {
+  background: rgba(199, 80, 80, 0.4) !important;
+  box-shadow: 0 0 15px rgba(199, 80, 80, 0.4) !important;
+  color: #fff !important;
+}
+
+.el-button.is-disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  filter: grayscale(1);
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+/* 自定义开关 */
+.el-switch__core {
+  background: rgba(0, 0, 0, 0.5) !important;
+  border: 1px solid rgba(255, 255, 255, 0.2) !important;
+}
+
+.el-switch.is-checked .el-switch__core {
+  background: var(--primary-color) !important;
+  border-color: var(--primary-light) !important;
+  box-shadow: 0 0 10px rgba(58, 145, 199, 0.5);
+}
+
+/* 自定义输入框 */
+.el-input__wrapper {
+  background-color: rgba(0, 0, 0, 0.3) !important;
+  box-shadow: 0 0 0 1px rgba(58, 145, 199, 0.3) inset !important;
+  color: var(--text-primary) !important;
+}
+
+.el-input__wrapper.is-focus {
+  box-shadow: 0 0 0 1px var(--primary-color) inset !important;
+}
+
+.el-input__inner {
+  color: #fff !important;
+  font-family: var(--font-mono);
 }
 
 /* ========================================
@@ -2217,72 +2675,239 @@ const syncProductionCount = () => {
   flex-shrink: 0;
 }
 
-/* 生产状态卡片 */
-.status-card .status-display {
-  text-align: center;
-  margin-bottom: 12px;
+/* 生产状态卡片 - 终极增强版 */
+.status-card {
+  position: relative;
+  overflow: hidden;
 }
 
+/* 状态指示器 - 晶体呼吸效果 */
 .status-indicator {
   display: inline-block;
-  padding: 10px 25px;
-  border-radius: 6px;
-  font-size: 20px;
+  padding: 12px 32px;
+  border-radius: 4px;
+  font-size: 26px;
   font-weight: 700;
-  margin-bottom: 8px;
-  letter-spacing: 2px;
+  margin-bottom: 16px;
+  letter-spacing: 6px;
   font-family: var(--font-mono);
+  text-transform: uppercase;
+  min-width: 160px;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+  transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+  backdrop-filter: blur(10px);
+  z-index: 1;
+}
+
+/* 玻璃质感光泽 */
+.status-indicator::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -150%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.2),
+    rgba(255, 255, 255, 0.4),
+    rgba(255, 255, 255, 0.2),
+    transparent
+  );
+  transform: skewX(-25deg);
+  animation: shine-sweep 4s infinite ease-in-out;
+  pointer-events: none;
+}
+
+/* 运行状态 - 绿色脉冲 */
+.status-indicator.running {
+  background: rgba(74, 157, 110, 0.1);
+  color: #4fffa3;
+  border: 1px solid rgba(74, 157, 110, 0.6);
+  box-shadow: 
+    0 0 15px rgba(74, 157, 110, 0.3),
+    inset 0 0 20px rgba(74, 157, 110, 0.1);
+  text-shadow: 0 0 10px rgba(79, 255, 163, 0.8);
+  animation: pulse-green 2s infinite ease-in-out;
+}
+
+/* 停止状态 - 红色警示 */
+.status-indicator.stopped {
+  background: rgba(199, 80, 80, 0.1);
+  color: #ff5c5c;
+  border: 1px solid rgba(199, 80, 80, 0.6);
+  box-shadow: 
+    0 0 15px rgba(199, 80, 80, 0.3),
+    inset 0 0 20px rgba(199, 80, 80, 0.1);
+  text-shadow: 0 0 10px rgba(255, 92, 92, 0.8);
+  animation: pulse-red 2s infinite ease-in-out;
+}
+
+/* 暂停状态 - 黄色呼吸 */
+.status-indicator.paused {
+  background: rgba(212, 145, 94, 0.1);
+  color: #ffd166;
+  border: 1px solid rgba(212, 145, 94, 0.6);
+  box-shadow: 
+    0 0 15px rgba(212, 145, 94, 0.3),
+    inset 0 0 20px rgba(212, 145, 94, 0.1);
+  text-shadow: 0 0 10px rgba(255, 209, 102, 0.8);
+  animation: pulse-yellow 2s infinite ease-in-out;
+}
+
+/* 模式显示 - 科技标签 */
+.mode-display {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  letter-spacing: 2px;
+  margin-bottom: 20px;
   text-transform: uppercase;
 }
 
-.status-indicator.running {
-  background: rgba(74, 157, 110, 0.15);
-  color: var(--success-color);
-  border: 1px solid rgba(74, 157, 110, 0.4);
-  box-shadow: 0 0 20px rgba(74, 157, 110, 0.1);
-}
-
-.status-indicator.stopped {
-  background: rgba(199, 80, 80, 0.15);
-  color: var(--danger-color);
-  border: 1px solid rgba(199, 80, 80, 0.4);
-}
-
-.status-indicator.paused {
-  background: rgba(212, 145, 94, 0.15);
-  color: var(--warning-color);
-  border: 1px solid rgba(212, 145, 94, 0.4);
-}
-
-.mode-display {
-  color: var(--text-secondary);
-  font-size: 13px;
-}
-
 .mode-display strong {
-  color: var(--accent-color);
+  color: var(--accent-light);
+  font-size: 16px;
+  padding: 2px 8px;
+  background: rgba(45, 183, 181, 0.15);
+  border: 1px solid rgba(45, 183, 181, 0.4);
+  border-radius: 4px;
+  box-shadow: 0 0 10px rgba(45, 183, 181, 0.2);
 }
 
+/* 生产计数器 - 全息能量槽 */
 .production-count {
-  text-align: center;
-  padding: 12px;
-  background: rgba(58, 145, 199, 0.08);
-  border-radius: 6px;
-  border: 1px solid rgba(58, 145, 199, 0.15);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: 
+    linear-gradient(180deg, rgba(10, 20, 30, 0.6) 0%, rgba(10, 20, 30, 0.8) 100%),
+    repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(58, 145, 199, 0.05) 2px,
+      rgba(58, 145, 199, 0.05) 4px
+    );
+  border-radius: 4px;
+  border: 1px solid rgba(58, 145, 199, 0.3);
+  position: relative;
+  overflow: hidden;
+  box-shadow: inset 0 0 30px rgba(0, 0, 0, 0.5);
+}
+
+/* 四角装饰 */
+.production-count::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 1px solid transparent;
+  background: 
+    linear-gradient(135deg, var(--primary-color) 0%, transparent 5%) top left,
+    linear-gradient(225deg, var(--primary-color) 0%, transparent 5%) top right,
+    linear-gradient(45deg, var(--primary-color) 0%, transparent 5%) bottom left,
+    linear-gradient(315deg, var(--primary-color) 0%, transparent 5%) bottom right;
+  background-size: 20px 20px;
+  background-repeat: no-repeat;
+  pointer-events: none;
+}
+
+/* 扫描线动画 */
+.production-count::before {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: 0;
+  width: 100%;
+  height: 20%;
+  background: linear-gradient(
+    180deg,
+    transparent,
+    rgba(58, 145, 199, 0.2),
+    rgba(58, 145, 199, 0.5),
+    rgba(58, 145, 199, 0.2),
+    transparent
+  );
+  animation: scan-vertical 3s linear infinite;
+  pointer-events: none;
 }
 
 .count-value {
-  font-size: 32px;
-  font-weight: 600;
-  color: var(--primary-color);
-  margin: 0 4px;
+  font-size: 56px;
+  line-height: 1;
+  font-weight: 700;
+  color: #fff;
+  margin: 8px 0;
   font-family: var(--font-mono);
-  letter-spacing: -1px;
+  letter-spacing: 4px;
+  text-shadow: 
+    0 0 10px rgba(58, 145, 199, 0.8),
+    0 0 20px rgba(58, 145, 199, 0.6),
+    0 0 40px rgba(58, 145, 199, 0.4);
+  position: relative;
+  z-index: 2;
+  filter: drop-shadow(0 0 5px rgba(58, 145, 199, 0.5));
 }
 
-.count-label, .count-unit {
+.count-label {
   color: var(--text-muted);
   font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 3px;
+  margin-bottom: 4px;
+  z-index: 2;
+}
+
+.count-unit {
+  color: var(--primary-light);
+  font-size: 14px;
+  position: absolute;
+  bottom: 15px;
+  right: 15px;
+  opacity: 0.8;
+  font-family: var(--font-mono);
+  border: 1px solid rgba(58, 145, 199, 0.3);
+  padding: 2px 6px;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.3);
+}
+
+/* 动画定义 */
+@keyframes shine-sweep {
+  0% { left: -150%; opacity: 0; }
+  20% { opacity: 1; }
+  40% { left: 150%; opacity: 0; }
+  100% { left: 150%; opacity: 0; }
+}
+
+@keyframes pulse-green {
+  0%, 100% { box-shadow: 0 0 15px rgba(74, 157, 110, 0.3), inset 0 0 20px rgba(74, 157, 110, 0.1); border-color: rgba(74, 157, 110, 0.6); }
+  50% { box-shadow: 0 0 25px rgba(74, 157, 110, 0.6), inset 0 0 30px rgba(74, 157, 110, 0.3); border-color: rgba(74, 157, 110, 1); }
+}
+
+@keyframes pulse-red {
+  0%, 100% { box-shadow: 0 0 15px rgba(199, 80, 80, 0.3), inset 0 0 20px rgba(199, 80, 80, 0.1); border-color: rgba(199, 80, 80, 0.6); }
+  50% { box-shadow: 0 0 25px rgba(199, 80, 80, 0.6), inset 0 0 30px rgba(199, 80, 80, 0.3); border-color: rgba(199, 80, 80, 1); }
+}
+
+@keyframes pulse-yellow {
+  0%, 100% { box-shadow: 0 0 15px rgba(212, 145, 94, 0.3), inset 0 0 20px rgba(212, 145, 94, 0.1); border-color: rgba(212, 145, 94, 0.6); }
+  50% { box-shadow: 0 0 25px rgba(212, 145, 94, 0.6), inset 0 0 30px rgba(212, 145, 94, 0.3); border-color: rgba(212, 145, 94, 1); }
+}
+
+@keyframes scan-vertical {
+  0% { top: -20%; opacity: 0; }
+  10% { opacity: 1; }
+  90% { opacity: 1; }
+  100% { top: 120%; opacity: 0; }
 }
 
 /* 控制面板 */
