@@ -973,7 +973,7 @@ async def get_plan_progress(device_id: str, db: Session = Depends(get_db)):
 
 # ---------- 产品检测API ----------
 @app.post("/api/product/detection", tags=["产品检测"])
-async def report_product_detection(data: dict):
+async def report_product_detection(data: dict, db: Session = Depends(get_db)):
     """
     上报产品检测结果
     
@@ -990,7 +990,22 @@ async def report_product_detection(data: dict):
     shape = data.get("shape", "")
     confidence = data.get("confidence", 0)
     
-    # 广播到前端
+    # 更新数据库中的生产计数
+    status = db.query(ProductionStatus).filter(ProductionStatus.device_id == device_id).first()
+    current_count = 0
+    
+    if status:
+        status.production_count += 1
+        db.commit()
+        db.refresh(status)
+        current_count = status.production_count
+        
+        # 广播状态变化
+        await manager.broadcast_status_change(
+            device_id, status.status, status.mode, status.production_count
+        )
+    
+    # 广播检测结果到前端
     await manager.broadcast_to_dashboard({
         "type": "product_detection",
         "data": {
@@ -998,14 +1013,16 @@ async def report_product_detection(data: dict):
             "product_type": product_type,
             "color": color,
             "shape": shape,
-            "confidence": confidence
+            "confidence": confidence,
+            "production_count": current_count
         },
         "timestamp": datetime.now().isoformat()
     })
     
     return {
         "success": True,
-        "product_type": product_type
+        "product_type": product_type,
+        "production_count": current_count
     }
 
 

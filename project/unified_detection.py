@@ -54,9 +54,9 @@ if IS_LINUX:
         print("⚠️ DHT11 库不可用，温湿度功能禁用")
 
 # ==================== 配置 ====================
-#SERVER_URL = "http://localhost:8000"
+SERVER_URL = "http://localhost:8000"
 "树莓派使用"
-SERVER_URL = "http://192.168.137.1:8000"
+#SERVER_URL = "http://192.168.137.1:8000"
 
 DEVICE_ID = "device_001"
 ENABLE_SERVER_REPORT = True
@@ -903,6 +903,11 @@ class ProductDetector:
             "size": None
         }
         
+        # 如果是跳帧，强制is_new为False，避免重复上报
+        if not should_detect and result.get("is_new"):
+            result = result.copy()
+            result["is_new"] = False
+        
         # 绘制轮廓和标注
         if self.last_contours and self.last_bbox:
             color_info = self.COLOR_RANGES.get(self.last_color_type, {})
@@ -1300,8 +1305,8 @@ class UnifiedDetectionSystem:
         
         # 初始化产品检测器（跳帧优化，稳定性检测，自动计数）
         self.product_detector = ProductDetector(
-            frame_skip=3,           # 每4帧检测一次
-            stability_frames=3,     # 连续3帧确认
+            frame_skip=5,           # 每6帧检测一次
+            stability_frames=8,     # 连续8帧确认
             auto_count=True         # 启用自动计数
         )
         
@@ -1584,7 +1589,7 @@ class UnifiedDetectionSystem:
                 )
             threading.Thread(target=_report, daemon=True).start()
         
-        elif mode == "product" and detection_info.get("detected"):
+        elif mode == "product" and detection_info.get("is_new"):
             def _report():
                 self.server.report_product(detection_info)
             threading.Thread(target=_report, daemon=True).start()
@@ -1711,9 +1716,9 @@ class UnifiedDetectionSystem:
             
             # 统计信息
             cv2.putText(output, f"Product A: {self.product_detector.detection_count['product_a']}", (10, 30),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, self.product_detector.COLOR_RANGES["product_a"]["display_color"], 2)
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, self.product_detector.COLOR_RANGES["blue"]["display_color"], 2)
             cv2.putText(output, f"Product B: {self.product_detector.detection_count['product_b']}", (10, 55),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, self.product_detector.COLOR_RANGES["product_b"]["display_color"], 2)
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, self.product_detector.COLOR_RANGES["cyan"]["display_color"], 2)
             
             cv2.putText(output, "[PRODUCT MODE - ASYNC]", (w - 220, 30),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 150, 50), 2)

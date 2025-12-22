@@ -1458,17 +1458,20 @@ const setupWebSocket = async () => {
           confidence: data.confidence
         }
         
-        // 累计产品计数并同步到后端
+        // 累计产品计数
         if (data.product_type === 'product_a' || data.product_type === 'product_b') {
           if (data.product_type === 'product_a') {
             productACount.value++
           } else {
             productBCount.value++
           }
-          productionCount.value++
           
-          // 同步到后端数据库
-          syncProductionCount()
+          // 使用后端返回的最新计数
+          if (data.production_count !== undefined) {
+            productionCount.value = data.production_count
+          } else {
+            productionCount.value++
+          }
         }
         
         // 显示检测成功提示
