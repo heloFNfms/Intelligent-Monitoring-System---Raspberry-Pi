@@ -1267,12 +1267,23 @@ class UnifiedDetectionSystem:
         # 初始化危险区域检测器
         # 尝试使用NCNN模型，如果不可用则回退到PyTorch模型
         import os
+        model_path = "yolov8n.pt"
+        
+        # 自动检测并导出 NCNN 模型（针对树莓派优化）
+        if IS_LINUX and not os.path.exists("yolov8n_ncnn_model") and os.path.exists("yolov8n.pt"):
+            print("⏳ 正在为树莓派优化模型 (导出为 NCNN)... 这可能需要几分钟")
+            try:
+                temp_model = YOLO("yolov8n.pt")
+                temp_model.export(format="ncnn")
+                print("✓ 模型优化完成！下次启动将自动使用 NCNN 加速")
+            except Exception as e:
+                print(f"⚠️ 模型优化失败: {e}")
+
         if os.path.exists("yolov8n_ncnn_model"):
             model_path = "yolov8n_ncnn_model"
-            print("✓ 使用 NCNN 格式模型（ARM优化）")
+            print("✓ 使用 NCNN 格式模型（ARM架构优化）")
         else:
-            model_path = "yolov8n.pt"
-            print("⚠️ NCNN模型不可用，使用 PyTorch 模型")
+            print("⚠️ NCNN模型不可用，使用 PyTorch 模型（性能可能受限）")
         
         self.zone_detector = ZoneDetector(
             model_path=model_path,
@@ -1281,19 +1292,22 @@ class UnifiedDetectionSystem:
             alert_cooldown=3.0
         )
         
-        # 配置危险区域（屏幕右半部分）
+        # 配置危险区域（屏幕右侧 2/3 区域）
+        # 调整原因：左右各一半容易误触，将危险区缩小到右侧，留出更大的安全操作空间
+        danger_start_x = int(CAMERA_WIDTH * 0.4)  # 从 40% 处开始算危险区
+        
         self.zone_detector.add_danger_zone([
-            (CAMERA_WIDTH // 2, 0),
+            (danger_start_x, 0),
             (CAMERA_WIDTH, 0),
             (CAMERA_WIDTH, CAMERA_HEIGHT),
-            (CAMERA_WIDTH // 2, CAMERA_HEIGHT)
+            (danger_start_x, CAMERA_HEIGHT)
         ])
         
-        # 配置安全区域（屏幕左半部分）
+        # 配置安全区域（屏幕左侧 40% 区域）
         self.zone_detector.add_safe_zone([
             (0, 0),
-            (CAMERA_WIDTH // 2, 0),
-            (CAMERA_WIDTH // 2, CAMERA_HEIGHT),
+            (danger_start_x, 0),
+            (danger_start_x, CAMERA_HEIGHT),
             (0, CAMERA_HEIGHT)
         ])
         
@@ -1659,9 +1673,9 @@ class UnifiedDetectionSystem:
             cv2.addWeighted(overlay, 0.3, output, 0.7, 0, output)
             
             # 绘制警戒线
-            mid_x = w // 2
-            cv2.line(output, (mid_x, 0), (mid_x, h), (0, 255, 255), 2)
-            cv2.putText(output, "WARNING LINE", (mid_x + 10, 30),
+            line_x = int(w * 0.4)
+            cv2.line(output, (line_x, 0), (line_x, h), (0, 255, 255), 2)
+            cv2.putText(output, "WARNING LINE", (line_x + 10, 30),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
             
             # 绘制检测框（使用缓存的检测结果）

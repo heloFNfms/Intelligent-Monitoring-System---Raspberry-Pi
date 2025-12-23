@@ -437,19 +437,63 @@ async def report_sensor(report: SensorReport, db: Session = Depends(get_db)):
         report.device_id, report.sensor_type, report.value, report.unit
     )
     
-    # 检查温度报警
+    # 获取调度器和阈值配置
+    scheduler = get_scheduler()
+    thresholds = device_thresholds.get(report.device_id, {})
+    
+    # 检查温度报警和调度
     if report.sensor_type == "temperature":
-        if report.value >= settings.TEMP_DANGER_THRESHOLD:
+        temp_max = thresholds.get("tempMax", settings.TEMP_DANGER_THRESHOLD)
+        if report.value >= temp_max:
             alert = AlertRecord(
                 device_id=report.device_id,
                 alert_type="temperature",
-                message=f"温度过高: {report.value}°C",
+                message=f"温度过高: {report.value}°C (阈值: {temp_max}°C)",
                 level="danger"
             )
             db.add(alert)
             db.commit()
             await manager.broadcast_alert(report.device_id, "temperature", 
                 f"温度过高警报: {report.value}°C", "danger")
+        
+        # 检查温度调度规则
+        await scheduler.check_temperature(report.device_id, report.value)
+    
+    # 检查湿度报警和调度
+    elif report.sensor_type == "humidity":
+        humidity_max = thresholds.get("humidityMax", 80)
+        if report.value >= humidity_max:
+            alert = AlertRecord(
+                device_id=report.device_id,
+                alert_type="humidity",
+                message=f"湿度过高: {report.value}% (阈值: {humidity_max}%)",
+                level="danger"
+            )
+            db.add(alert)
+            db.commit()
+            await manager.broadcast_alert(report.device_id, "humidity", 
+                f"湿度过高警报: {report.value}%", "danger")
+        
+        # 检查湿度调度规则
+        await scheduler.check_humidity(report.device_id, report.value)
+    
+    # 检查压力报警和调度
+    elif report.sensor_type == "pressure":
+        pressure_max = thresholds.get("pressureMax", 110)
+        if report.value >= pressure_max:
+            alert = AlertRecord(
+                device_id=report.device_id,
+                alert_type="pressure",
+                message=f"压力过高: {report.value}kPa (阈值: {pressure_max}kPa)",
+                level="danger"
+            )
+            db.add(alert)
+            db.commit()
+            await manager.broadcast_alert(report.device_id, "pressure", 
+                f"压力过高警报: {report.value}kPa", "danger")
+        
+        # 检查压力调度规则
+        await scheduler.check_pressure(report.device_id, report.value)
     
     return record
 
@@ -574,12 +618,21 @@ async def send_control(command: ControlCommand, db: Session = Depends(get_db)):
     if cmd == "start":
         status.status = "running"
         message = "生产线已启动"
+        # 用户手动启动，清除调度器暂停状态
+        scheduler = get_scheduler()
+        scheduler.clear_scheduler_pause(device_id)
     elif cmd == "stop":
         status.status = "stopped"
         message = "生产线已停止"
+        # 用户手动停止，清除调度器暂停状态（防止自动恢复）
+        scheduler = get_scheduler()
+        scheduler.clear_scheduler_pause(device_id)
     elif cmd == "pause":
         status.status = "paused"
         message = "生产线已暂停"
+        # 用户手动暂停，清除调度器暂停状态（防止自动恢复）
+        scheduler = get_scheduler()
+        scheduler.clear_scheduler_pause(device_id)
     elif cmd == "switch_mode":
         new_mode = command.params.get("mode", "product_a") if command.params else "product_a"
         status.mode = new_mode

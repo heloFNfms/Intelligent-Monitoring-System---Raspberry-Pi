@@ -85,7 +85,7 @@
       </div>
     </header>
 
-    <main class="main-content">
+    <main class="main-content" :class="{ 'alarm-active': inDangerZone }">
       <!-- 左侧面板 - 核心控制 -->
       <section class="left-panel">
         <!-- 生产状态卡片 -->
@@ -776,6 +776,19 @@ const initCharts = () => {
   
   const option = {
     backgroundColor: 'transparent',
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'line', lineStyle: { color: 'rgba(255, 255, 255, 0.3)', width: 1, type: 'dashed' } },
+      backgroundColor: 'rgba(10, 20, 30, 0.9)',
+      borderColor: config.color,
+      textStyle: { color: '#fff', fontSize: 12 },
+      formatter: (params) => {
+        const item = params[0]
+        return `${item.name}<br/>
+                <span style="display:inline-block;margin-right:4px;border-radius:10px;width:10px;height:10px;background-color:${item.color};"></span>
+                ${config.name}: <b>${item.value}</b>`
+      }
+    },
     grid: { top: 20, right: 15, bottom: 30, left: 55 },
     xAxis: { 
       type: 'category', 
@@ -798,20 +811,44 @@ const initCharts = () => {
       type: 'line',
       smooth: true,
       symbol: 'circle',
-      symbolSize: 4,
+      symbolSize: 6,
+      showSymbol: false,  // 默认不显示点
+      showAllSymbol: false, // 不强制显示所有点
       data: [],
+      // 只有hover时才显示当前点
+      emphasis: {
+        itemStyle: {
+          opacity: 1,
+          borderWidth: 3,
+          shadowBlur: 10
+        }
+      },
       areaStyle: { 
         color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
           { offset: 0, color: config.gradientStart },
           { offset: 1, color: config.gradientEnd }
-        ])
+        ]),
+        shadowColor: config.gradientStart,
+        shadowBlur: 10
       },
-      lineStyle: { color: config.color, width: 2 },
-      itemStyle: { color: config.color, borderColor: '#0d2b45', borderWidth: 2 }
+      lineStyle: { 
+        color: config.color, 
+        width: 3,
+        shadowColor: config.color,
+        shadowBlur: 10,
+        cap: 'round'
+      },
+      itemStyle: { 
+        color: config.color, 
+        borderColor: '#fff', 
+        borderWidth: 2,
+        shadowColor: config.color,
+        shadowBlur: 5
+      }
     }],
     animation: true,
-    animationDuration: 180,
-    animationEasing: 'linear'
+    animationDuration: 1000,
+    animationEasing: 'cubicOut'
   }
   
   if (config.visualMap) {
@@ -819,6 +856,9 @@ const initCharts = () => {
   }
   
   mainChart.setOption(option)
+  
+  // 立即应用当前的阈值颜色配置
+  updateChartVisualMap()
 }
 
 // 更新图表数据
@@ -831,7 +871,12 @@ const updateChart = (chart, dataArray, newValue, maxPoints = 30) => {
     xAxis: { data: dataArray.map(d => d.time) },
     series: [{ data: dataArray.map(d => d.value) }]
   })
+  
+  // 更新后检查阈值并更新颜色
+  updateChartVisualMap()
 }
+
+
 
 // 只添加数据点，不更新图表
 const addDataPoint = (dataArray, newValue, maxPoints = 30) => {
@@ -850,6 +895,18 @@ const switchChartType = (type) => {
   else if (type === 'pressure') dataArray = pressureData.value
   
   const option = {
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: 'rgba(10, 20, 30, 0.9)',
+      borderColor: config.color,
+      textStyle: { color: '#fff' },
+      formatter: (params) => {
+        const item = params[0]
+        return `${item.name}<br/>
+                <span style="display:inline-block;margin-right:4px;border-radius:10px;width:10px;height:10px;background-color:${item.color};"></span>
+                ${config.name}: <b>${item.value}</b>`
+      }
+    },
     yAxis: { 
       name: config.name, 
       min: config.min, 
@@ -861,10 +918,36 @@ const switchChartType = (type) => {
         color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
           { offset: 0, color: config.gradientStart },
           { offset: 1, color: config.gradientEnd }
-        ])
+        ]),
+        shadowColor: config.gradientStart,
+        shadowBlur: 10
       },
-      lineStyle: { color: config.color },
-      itemStyle: { color: config.color, borderColor: '#0d2b45', borderWidth: 2 }
+      lineStyle: { 
+        color: config.color,
+        width: 3,
+        shadowColor: config.color,
+        shadowBlur: 10,
+        cap: 'round'
+      },
+      itemStyle: { 
+        color: config.color, 
+        borderColor: '#fff', 
+        borderWidth: 2,
+        shadowColor: config.color,
+        shadowBlur: 5
+      },
+      emphasis: {
+        itemStyle: {
+          opacity: 1,
+          borderWidth: 3,
+          shadowBlur: 10
+        }
+      },
+      smooth: true,
+      symbol: 'circle',
+      symbolSize: 6,
+      showSymbol: false,
+      showAllSymbol: false
     }],
     xAxis: { data: dataArray.map(d => d.time) }
   }
@@ -874,6 +957,96 @@ const switchChartType = (type) => {
   }
   
   mainChart.setOption(option)
+  
+  // 切换图表类型后，立即应用当前的阈值颜色配置
+  updateChartVisualMap()
+}
+
+// ========== 动态更新图表颜色（根据阈值分段着色） ==========
+const updateChartVisualMap = () => {
+  if (!mainChart) return
+  
+  const config = chartConfigs[chartType.value]
+  let minVal, maxVal, dataArray
+  
+  // 根据当前图表类型获取对应的阈值和数据
+  if (chartType.value === 'temperature') {
+    minVal = thresholds.value.tempMin
+    maxVal = thresholds.value.tempMax
+    dataArray = tempData.value
+  } else if (chartType.value === 'humidity') {
+    minVal = thresholds.value.humidityMin
+    maxVal = thresholds.value.humidityMax
+    dataArray = humidityData.value
+  } else if (chartType.value === 'pressure') {
+    minVal = thresholds.value.pressureMin
+    maxVal = thresholds.value.pressureMax
+    dataArray = pressureData.value
+  }
+  
+  // 使用 visualMap 的 piecewise 模式实现分段着色
+  mainChart.setOption({
+    visualMap: {
+      show: false,
+      type: 'piecewise',
+      dimension: 1, // 基于 y 值（数据值）
+      pieces: [
+        { lt: minVal, color: '#ff4d4f' },  // 低于最小阈值 - 红色
+        { gte: minVal, lte: maxVal, color: config.color }, // 正常范围 - 原色
+        { gt: maxVal, color: '#ff4d4f' }   // 高于最大阈值 - 红色
+      ],
+      seriesIndex: 0
+    },
+    series: [{
+      // 移除固定的 lineStyle.color，让 visualMap 控制颜色
+      lineStyle: { 
+        width: 3,
+        shadowBlur: 10
+      },
+      itemStyle: {
+        borderColor: '#fff',
+        borderWidth: 2,
+        shadowBlur: 5
+      },
+      // 保持渐变背景
+      areaStyle: { 
+        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+          { offset: 0, color: config.gradientStart },
+          { offset: 1, color: config.gradientEnd }
+        ]),
+        shadowColor: config.gradientStart,
+        shadowBlur: 10
+      }
+    }]
+  })
+}
+
+// 检查环境参数是否异常
+const checkEnvStatus = () => {
+  let isAlert = false
+  
+  // 检查温度
+  if (currentTemp.value !== null && (currentTemp.value < thresholds.value.tempMin || currentTemp.value > thresholds.value.tempMax)) {
+    isAlert = true
+  }
+  // 检查湿度
+  if (currentHumidity.value !== null && (currentHumidity.value < thresholds.value.humidityMin || currentHumidity.value > thresholds.value.humidityMax)) {
+    isAlert = true
+  }
+  // 检查压力
+  if (currentPressure.value !== null && (currentPressure.value < thresholds.value.pressureMin || currentPressure.value > thresholds.value.pressureMax)) {
+    isAlert = true
+  }
+  
+  // 如果有环境异常，点亮报警灯；否则（如果没有其他报警），熄灭
+  // 注意：这里可能会覆盖其他类型的报警（如危险区入侵），但根据需求先实现环境联动
+  // 更好的做法是维护一个 envAlert 状态，与 dangerZoneAlert 状态合并
+  if (isAlert) {
+    ledStatus.value.alert = true
+  } else if (!inDangerZone.value && !alarmActive.value) {
+    // 只有当没有危险区入侵且没有手动触发报警时，才熄灭
+    ledStatus.value.alert = false
+  }
 }
 
 // ========== 环境阈值配置 ==========
@@ -888,11 +1061,22 @@ const saveThresholds = async () => {
     })
     if (response.ok) {
       ElMessage.success('阈值配置已保存')
+      // 保存成功后，立即刷新图表颜色和报警状态
+      updateChartVisualMap()
+      loadHistoryData() // 刷新历史图表颜色
+      checkEnvStatus()
     } else {
       ElMessage.warning('阈值配置保存失败，本地生效')
+      // 即使保存失败，本地也刷新
+      updateChartVisualMap()
+      loadHistoryData() // 刷新历史图表颜色
+      checkEnvStatus()
     }
   } catch (e) {
     ElMessage.warning('网络错误，阈值配置仅本地生效')
+    updateChartVisualMap()
+    loadHistoryData() // 刷新历史图表颜色
+    checkEnvStatus()
   }
   savingThresholds.value = false
 }
@@ -903,6 +1087,13 @@ const initHistoryChart = () => {
   historyChart = echarts.init(historyChartRef.value)
   historyChart.setOption({
     backgroundColor: 'transparent',
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'line', lineStyle: { color: 'rgba(255, 255, 255, 0.3)', width: 1, type: 'dashed' } },
+      backgroundColor: 'rgba(10, 20, 30, 0.9)',
+      borderColor: '#409eff',
+      textStyle: { color: '#fff', fontSize: 12 }
+    },
     grid: { top: 20, right: 15, bottom: 30, left: 55 },
     xAxis: { 
       type: 'category', 
@@ -919,14 +1110,42 @@ const initHistoryChart = () => {
     series: [{
       type: 'line',
       smooth: true,
+      symbol: 'circle',
+      symbolSize: 6,
+      showSymbol: false,
+      showAllSymbol: false,
       data: [],
+      emphasis: {
+        itemStyle: {
+          opacity: 1,
+          borderWidth: 3,
+          shadowBlur: 10
+        }
+      },
       areaStyle: { 
         color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
           { offset: 0, color: 'rgba(64, 158, 255, 0.35)' },
           { offset: 1, color: 'rgba(64, 158, 255, 0.05)' }
-        ])
+        ]),
+        shadowColor: 'rgba(64, 158, 255, 0.2)',
+        shadowBlur: 10
       },
-      lineStyle: { color: '#409eff', width: 2 }
+      lineStyle: { 
+        color: '#409eff', 
+        width: 3,
+        shadowColor: '#409eff',
+        shadowBlur: 10,
+        cap: 'round'
+      },
+      itemStyle: {
+        color: '#409eff',
+        borderColor: '#fff',
+        borderWidth: 2,
+        shadowColor: '#409eff',
+        shadowBlur: 5
+      },
+      animationDuration: 2000,
+      animationEasing: 'cubicOut'
     }]
   })
 }
@@ -970,21 +1189,71 @@ const loadHistoryData = async () => {
         humidity: '#67c23a',
         pressure: '#2db7b5'
       }
-      const color = colors[historyType.value]
+      const defaultColor = colors[historyType.value]
       const units = { temperature: '°C', humidity: '%', pressure: 'kPa' }
       
+      // 获取当前类型对应的阈值
+      let minVal, maxVal
+      if (historyType.value === 'temperature') {
+        minVal = thresholds.value.tempMin
+        maxVal = thresholds.value.tempMax
+      } else if (historyType.value === 'humidity') {
+        minVal = thresholds.value.humidityMin
+        maxVal = thresholds.value.humidityMax
+      } else if (historyType.value === 'pressure') {
+        minVal = thresholds.value.pressureMin
+        maxVal = thresholds.value.pressureMax
+      }
+      
+      // 渐变色配置
+      const gradientStart = defaultColor + '59'
+      const gradientEnd = defaultColor + '0d'
+      
       historyChart.setOption({
+        tooltip: {
+          borderColor: defaultColor,
+          formatter: (params) => {
+            const item = params[0]
+            const unit = units[historyType.value]
+            const isItemOutOfRange = item.value < minVal || item.value > maxVal
+            const dotColor = isItemOutOfRange ? '#ff4d4f' : defaultColor
+            return `${item.name}<br/>
+                    <span style="display:inline-block;margin-right:4px;border-radius:10px;width:10px;height:10px;background-color:${dotColor};"></span>
+                    数值: <b>${item.value} ${unit}</b>${isItemOutOfRange ? ' ⚠️超限' : ''}`
+          }
+        },
+        // 使用 visualMap 分段着色
+        visualMap: {
+          show: false,
+          type: 'piecewise',
+          dimension: 1,
+          pieces: [
+            { lt: minVal, color: '#ff4d4f' },
+            { gte: minVal, lte: maxVal, color: defaultColor },
+            { gt: maxVal, color: '#ff4d4f' }
+          ],
+          seriesIndex: 0
+        },
         yAxis: { name: units[historyType.value] },
         xAxis: { data: sourceData.map(d => d.time) },
         series: [{
           data: sourceData.map(d => d.value),
-          lineStyle: { color },
-          itemStyle: { color },
+          lineStyle: { 
+            width: 3,
+            shadowBlur: 10
+          },
+          itemStyle: { 
+            borderColor: '#fff',
+            borderWidth: 2,
+            shadowBlur: 5
+          },
           areaStyle: { 
             color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-              { offset: 0, color: color + '59' },
-              { offset: 1, color: color + '0d' }
-            ])
+              { offset: 0, color: gradientStart },
+              { offset: 1, color: gradientEnd }
+            ]),
+            shadowColor: gradientStart,
+            shadowBlur: 10
           }
         }]
       })
@@ -1346,6 +1615,9 @@ const setupWebSocket = async () => {
           addDataPoint(humidityData.value, data.value)
         }
       }
+      
+      // 每次收到新数据都检查报警状态
+      checkEnvStatus()
     })
     
     // 检测数据更新
@@ -2283,6 +2555,29 @@ const syncProductionCount = () => {
   padding: 16px;
   height: calc(100vh - 70px); /* 使用固定高度 */
   overflow: hidden;
+}
+
+/* 报警状态下的屏幕四周红光渐变 */
+.main-content.alarm-active::after {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  z-index: 9999;
+  box-shadow: inset 0 0 100px 20px rgba(255, 0, 0, 0.5);
+  animation: alarm-pulse 1s infinite alternate;
+}
+
+@keyframes alarm-pulse {
+  0% {
+    box-shadow: inset 0 0 50px 10px rgba(255, 0, 0, 0.3);
+  }
+  100% {
+    box-shadow: inset 0 0 150px 30px rgba(255, 0, 0, 0.7);
+  }
 }
 
 /* 响应式布局 - 中等屏幕 */
