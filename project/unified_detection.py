@@ -84,20 +84,62 @@ class PersonState(Enum):
 
 @dataclass
 class TrackedPerson:
-    """追踪的人员信息"""
+    """追踪的人员信息 - 带状态防抖"""
     track_id: str                    # 追踪ID
     bbox: Tuple[int, int, int, int]  # 边界框
     center: Tuple[int, int]          # 中心点
-    state: PersonState               # 当前状态
-    last_seen: float                 # 最后一次看到的时间
+    confirmed_state: PersonState     # 已确认的状态（用于触发事件）
+    pending_state: PersonState       # 待确认的状态
+    pending_count: int = 0           # 待确认状态的连续帧数
+    last_seen: float = 0             # 最后一次看到的时间
     entered_danger_time: float = 0   # 进入危险区的时间
+    state_change_cooldown: float = 0 # 状态变化冷却时间
     
-    def update(self, bbox: Tuple[int, int, int, int], center: Tuple[int, int], state: PersonState):
-        """更新人员信息"""
+    # 状态确认需要的连续帧数（防抖）
+    CONFIRM_FRAMES: int = 5
+    # 状态变化最小间隔（秒）
+    STATE_CHANGE_INTERVAL: float = 1.5
+    
+    def update_position(self, bbox: Tuple[int, int, int, int], center: Tuple[int, int]):
+        """仅更新位置信息"""
         self.bbox = bbox
         self.center = center
-        self.state = state
         self.last_seen = time.time()
+    
+    def update_state(self, raw_state: PersonState) -> Optional[str]:
+        """
+        更新状态（带防抖）
+        返回: None=无变化, "enter"=进入危险区, "exit"=离开危险区
+        """
+        current_time = time.time()
+        
+        # 冷却期内不处理状态变化
+        if current_time < self.state_change_cooldown:
+            return None
+        
+        # 如果原始状态与待确认状态相同，增加计数
+        if raw_state == self.pending_state:
+            self.pending_count += 1
+        else:
+            # 状态变化，重置计数
+            self.pending_state = raw_state
+            self.pending_count = 1
+        
+        # 检查是否达到确认阈值
+        if self.pending_count >= self.CONFIRM_FRAMES:
+            if self.pending_state != self.confirmed_state:
+                old_state = self.confirmed_state
+                self.confirmed_state = self.pending_state
+                self.state_change_cooldown = current_time + self.STATE_CHANGE_INTERVAL
+                
+                # 判断事件类型
+                if old_state == PersonState.SAFE and self.confirmed_state == PersonState.DANGER:
+                    self.entered_danger_time = current_time
+                    return "enter"
+                elif old_state == PersonState.DANGER and self.confirmed_state == PersonState.SAFE:
+                    return "exit"
+        
+        return None
 
 
 @dataclass
@@ -247,11 +289,16 @@ class ServerClient:
 # ==================== 人员追踪器 ====================
 class PersonTracker:
     """
-    简单的人员追踪器 - 基于位置匹配
-    用于追踪人员的进入/离开危险区域状态
+    稳定的人员追踪器 - 带状态防抖
+    
+    核心改进：
+    1. 使用IOU匹配而非单纯距离匹配，提高追踪稳定性
+    2. 状态变化需要连续多帧确认（防抖）
+    3. 状态变化有冷却时间，避免边界抖动
+    4. 新人员需要稳定后才触发事件
     """
     
-    def __init__(self, max_distance: float = 100, timeout: float = 2.0):
+    def __init__(self, max_distance: float = 150, timeout: float = 3.0):
         """
         Args:
             max_distance: 最大匹配距离（像素）
@@ -271,15 +318,46 @@ class PersonTracker:
         """计算两点距离"""
         return np.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
     
-    def _find_best_match(self, center: Tuple[int, int]) -> Optional[str]:
-        """找到最佳匹配的已追踪人员"""
+    def _calculate_iou(self, box1: Tuple[int, int, int, int], box2: Tuple[int, int, int, int]) -> float:
+        """计算两个边界框的IOU"""
+        x1 = max(box1[0], box2[0])
+        y1 = max(box1[1], box2[1])
+        x2 = min(box1[2], box2[2])
+        y2 = min(box1[3], box2[3])
+        
+        inter_area = max(0, x2 - x1) * max(0, y2 - y1)
+        box1_area = (box1[2] - box1[0]) * (box1[3] - box1[1])
+        box2_area = (box2[2] - box2[0]) * (box2[3] - box2[1])
+        union_area = box1_area + box2_area - inter_area
+        
+        return inter_area / union_area if union_area > 0 else 0
+    
+    def _find_best_match(self, bbox: Tuple[int, int, int, int], center: Tuple[int, int], 
+                         matched_ids: Set[str]) -> Optional[str]:
+        """
+        找到最佳匹配的已追踪人员
+        优先使用IOU匹配，其次使用距离匹配
+        """
         best_match = None
-        best_distance = self.max_distance
+        best_score = 0
         
         for track_id, person in self.tracked_persons.items():
+            if track_id in matched_ids:
+                continue
+            
+            # 计算IOU
+            iou = self._calculate_iou(bbox, person.bbox)
+            
+            # 计算距离得分（归一化到0-1）
             distance = self._calculate_distance(center, person.center)
-            if distance < best_distance:
-                best_distance = distance
+            distance_score = max(0, 1 - distance / self.max_distance)
+            
+            # 综合得分：IOU权重更高
+            score = iou * 0.7 + distance_score * 0.3
+            
+            # IOU > 0.3 或 距离足够近
+            if (iou > 0.3 or distance < self.max_distance) and score > best_score:
+                best_score = score
                 best_match = track_id
         
         return best_match
@@ -298,68 +376,49 @@ class PersonTracker:
         """
         events = []
         current_time = time.time()
-        matched_ids = set()
+        matched_ids: Set[str] = set()
         
         # 处理每个检测结果
         for detection in detections:
             x1, y1, x2, y2, conf = detection
             bbox = (x1, y1, x2, y2)
             center = (int((x1 + x2) / 2), int(y2))  # 使用脚部中心点
-            current_state = get_state_func(center)
+            raw_state = get_state_func(center)
             
             # 尝试匹配已有人员
-            match_id = self._find_best_match(center)
+            match_id = self._find_best_match(bbox, center, matched_ids)
             
-            if match_id and match_id not in matched_ids:
-                # 匹配到已有人员，检查状态变化
+            if match_id:
+                # 匹配到已有人员
                 person = self.tracked_persons[match_id]
-                old_state = person.state
+                person.update_position(bbox, center)
                 
-                # 状态变化检测
-                if old_state != current_state:
-                    if old_state == PersonState.SAFE and current_state == PersonState.DANGER:
-                        # 从安全区进入危险区
-                        events.append({
-                            "track_id": match_id,
-                            "event": "enter",
-                            "bbox": bbox,
-                            "center": center
-                        })
-                        person.entered_danger_time = current_time
-                    elif old_state == PersonState.DANGER and current_state == PersonState.SAFE:
-                        # 从危险区离开到安全区
-                        events.append({
-                            "track_id": match_id,
-                            "event": "exit",
-                            "bbox": bbox,
-                            "center": center
-                        })
+                # 更新状态（带防抖）
+                event_type = person.update_state(raw_state)
+                if event_type:
+                    events.append({
+                        "track_id": match_id,
+                        "event": event_type,
+                        "bbox": bbox,
+                        "center": center
+                    })
                 
-                # 更新人员信息
-                person.update(bbox, center, current_state)
                 matched_ids.add(match_id)
             else:
-                # 新人员
+                # 新人员 - 初始状态为SAFE，需要通过防抖确认
                 new_id = self._generate_id()
                 new_person = TrackedPerson(
                     track_id=new_id,
                     bbox=bbox,
                     center=center,
-                    state=current_state,
+                    confirmed_state=PersonState.SAFE,  # 初始假设在安全区
+                    pending_state=raw_state,
+                    pending_count=1,
                     last_seen=current_time
                 )
                 self.tracked_persons[new_id] = new_person
                 matched_ids.add(new_id)
-                
-                # 如果新人员直接出现在危险区，也触发进入事件
-                if current_state == PersonState.DANGER:
-                    events.append({
-                        "track_id": new_id,
-                        "event": "enter",
-                        "bbox": bbox,
-                        "center": center
-                    })
-                    new_person.entered_danger_time = current_time
+                # 新人员不立即触发事件，等待状态确认
         
         # 清理超时的人员
         expired_ids = []
@@ -368,10 +427,10 @@ class PersonTracker:
                 if current_time - person.last_seen > self.timeout:
                     expired_ids.append(track_id)
                     # 如果人员在危险区消失，视为离开
-                    if person.state == PersonState.DANGER:
+                    if person.confirmed_state == PersonState.DANGER:
                         events.append({
                             "track_id": track_id,
-                            "event": "exit_timeout",
+                            "event": "exit",
                             "bbox": person.bbox,
                             "center": person.center
                         })
@@ -383,7 +442,7 @@ class PersonTracker:
     
     def get_persons_in_danger(self) -> List[TrackedPerson]:
         """获取当前在危险区的人员列表"""
-        return [p for p in self.tracked_persons.values() if p.state == PersonState.DANGER]
+        return [p for p in self.tracked_persons.values() if p.confirmed_state == PersonState.DANGER]
     
     def reset(self):
         """重置追踪器"""
@@ -418,8 +477,8 @@ class ZoneDetector:
         self.scale_x = 1.0
         self.scale_y = 1.0
         
-        # 人员追踪器
-        self.tracker = PersonTracker(max_distance=100, timeout=2.0)
+        # 人员追踪器 - 增大匹配距离和超时时间，提高稳定性
+        self.tracker = PersonTracker(max_distance=150, timeout=3.0)
         
         # 统计信息
         self.statistics = ZoneStatistics()
@@ -521,7 +580,7 @@ class ZoneDetector:
                     )
                     self.alert_callback(alert)
             
-            elif event_type in ["exit", "exit_timeout"]:
+            elif event_type == "exit":
                 # 离开危险区
                 self.statistics.person_exited(track_id)
                 if self.exit_callback:
@@ -603,7 +662,7 @@ class ZoneDetector:
             "person_count": person_count,
             "in_danger_zone": stats.current_in_danger > 0,
             "alert_triggered": len([e for e in events if e["event"] == "enter"]) > 0,
-            "exit_triggered": len([e for e in events if e["event"] in ["exit", "exit_timeout"]]) > 0,
+            "exit_triggered": len([e for e in events if e["event"] == "exit"]) > 0,
             "statistics": stats.to_dict(),
             "events": events
         }
@@ -1292,22 +1351,21 @@ class UnifiedDetectionSystem:
             alert_cooldown=3.0
         )
         
-        # 配置危险区域（屏幕右侧 2/3 区域）
-        # 调整原因：左右各一半容易误触，将危险区缩小到右侧，留出更大的安全操作空间
-        danger_start_x = int(CAMERA_WIDTH * 0.4)  # 从 40% 处开始算危险区
+        # 配置危险区域（屏幕右半部分，占画面50%）
+        mid_x = CAMERA_WIDTH // 2  # 画面中线
         
         self.zone_detector.add_danger_zone([
-            (danger_start_x, 0),
+            (mid_x, 0),
             (CAMERA_WIDTH, 0),
             (CAMERA_WIDTH, CAMERA_HEIGHT),
-            (danger_start_x, CAMERA_HEIGHT)
+            (mid_x, CAMERA_HEIGHT)
         ])
         
-        # 配置安全区域（屏幕左侧 40% 区域）
+        # 配置安全区域（屏幕左半部分，占画面50%）
         self.zone_detector.add_safe_zone([
             (0, 0),
-            (danger_start_x, 0),
-            (danger_start_x, CAMERA_HEIGHT),
+            (mid_x, 0),
+            (mid_x, CAMERA_HEIGHT),
             (0, CAMERA_HEIGHT)
         ])
         
